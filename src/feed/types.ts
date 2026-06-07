@@ -12,6 +12,8 @@ export interface MediaItem {
   title?: string;
   /** File path / location (relative path within an opened folder, or a URL). */
   path?: string;
+  /** Timestamp (epoch ms) — file modified time, or a feed-provided date. */
+  date?: number;
   /** Optional click-through link. */
   link?: string;
   /** Native aspect ratio (width / height), if known. Defaults to 1.5. */

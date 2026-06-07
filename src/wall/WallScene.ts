@@ -27,7 +27,7 @@ const PAN_Y_MAX = 1.7; // vertical free-pan limit
 const DRAG_GAIN = 0.6; // click-drag scroll sensitivity (lower = gentler)
 const KEEP_BUFFER_COLS = 10; // columns kept resident (mesh+texture) beyond the view
 const MAX_INFLIGHT = 6; // cap concurrent texture decodes (a jump can't freeze the tab)
-const FAST_VEL = 6; // above this scroll speed, defer loading (don't load fly-past tiles)
+const MAX_NEW_LOADS_PER_FRAME = 2; // spread GPU uploads across frames (smoother scroll)
 
 type WallEvent = "select" | "deselect" | "hover" | "scroll" | "progress";
 type Cb = (...args: any[]) => void;
@@ -513,19 +513,26 @@ export class WallScene {
    * upload a 50MB texture. Remote URLs go through the plain loader (avoids CORS
    * canvas-tainting). Full-res is swapped back in on focus via loadFull().
    */
-  private async acquireTexture(url: string, maxEdge = 640): Promise<THREE.Texture> {
+  private async acquireTexture(url: string, maxEdge = 512): Promise<THREE.Texture> {
     if (url.startsWith("blob:") || url.startsWith("data:")) {
       const blob = await (await fetch(url)).blob();
-      const bmp = await createImageBitmap(blob);
-      const s = Math.min(1, maxEdge / Math.max(bmp.width, bmp.height));
-      const w = Math.max(1, Math.round(bmp.width * s));
-      const h = Math.max(1, Math.round(bmp.height * s));
-      const canvas = document.createElement("canvas");
-      canvas.width = w;
-      canvas.height = h;
-      canvas.getContext("2d")!.drawImage(bmp, 0, 0, w, h);
-      bmp.close();
-      return new THREE.CanvasTexture(canvas);
+      // Decode AND downscale off the main thread (resizeWidth preserves aspect),
+      // then use the ImageBitmap directly — no canvas draw, smaller GPU upload.
+      // This is what keeps scrolling smooth while thumbnails stream in.
+      let bmp: ImageBitmap;
+      try {
+        bmp = await createImageBitmap(blob, {
+          resizeWidth: maxEdge,
+          resizeQuality: "medium",
+          imageOrientation: "flipY",
+        });
+      } catch {
+        bmp = await createImageBitmap(blob); // older browsers: no resize options
+      }
+      const tex = new THREE.Texture(bmp);
+      tex.flipY = false; // the bitmap is already oriented (imageOrientation:flipY)
+      tex.needsUpdate = true;
+      return tex;
     }
     return new Promise<THREE.Texture>((resolve, reject) => {
       this.loader.load(url, resolve, undefined, reject);
@@ -983,21 +990,51 @@ export class WallScene {
     this.visStart = newStart;
     this.visEnd = newEnd;
 
-    // Don't start loads while flinging/scrubbing fast (avoids loading everything
-    // you fly past), and cap concurrent decodes so a long jump can't freeze the tab.
-    const fast = Math.abs(this.velocity) > FAST_VEL;
+    // Streaming load: fill the visible columns sweeping in the travel direction,
+    // plus a few lookahead columns ahead of you, capped by MAX_INFLIGHT so it
+    // streams in *while scrolling* (one column at a time) without flooding the
+    // decoder. Jump far away and it simply loads at the new location.
+    if (maxIndex >= 0 && this.pendingCount < MAX_INFLIGHT) {
+      const dir = this.velocity > 0.2 ? 1 : this.velocity < -0.2 ? -1 : 0;
+      const aheadCols = 6;
+      const maxCol = Math.floor(maxIndex / ROWS);
+      const firstCol = Math.floor(newStart / ROWS);
+      const lastCol = Math.floor(newEnd / ROWS);
+      const lo = Math.max(0, firstCol - (dir < 0 ? aheadCols : 0));
+      const hi = Math.min(maxCol, lastCol + (dir > 0 ? aheadCols : 0));
+      // Start only a few NEW loads per frame so texture uploads spread across
+      // frames instead of spiking (that spike is the scroll lag while skeletons
+      // are showing). Off-thread decode + this throttle keep scrolling smooth.
+      let budget = MAX_NEW_LOADS_PER_FRAME;
+      const loadCol = (c: number): boolean => {
+        const base = c * ROWS;
+        for (let r = 0; r < ROWS; r++) {
+          const idx = base + r;
+          if (idx > maxIndex || idx < keepFirst || idx > keepLast) continue;
+          const tile = this.ensureTile(idx);
+          if (tile.state === "idle") {
+            this.loadTile(tile);
+            budget--;
+            if (budget <= 0 || this.pendingCount >= MAX_INFLIGHT) return false;
+          }
+        }
+        return true;
+      };
+      if (dir < 0) {
+        for (let c = hi; c >= lo; c--) if (!loadCol(c)) break;
+      } else {
+        for (let c = lo; c <= hi; c++) if (!loadCol(c)) break;
+      }
+    }
 
     const vHeight = 2 * Math.tan((this.camera.fov * Math.PI) / 180 / 2) * this.camDist;
-    const focusH = Math.min(2.7, vHeight * 0.62);
-    const focusMaxW = this.viewportWidth * 0.85;
+    // Leave room at the bottom (caption) and sides (permanent prev/next arrows).
+    const focusH = Math.min(2.4, vHeight * 0.56);
+    const focusMaxW = this.viewportWidth * 0.78;
 
     for (let i = newStart; i <= newEnd; i++) {
       const tile = this.ensureTile(i);
       tile.mesh.visible = true;
-
-      if (tile.state === "idle" && !fast && this.pendingCount < MAX_INFLIGHT) {
-        this.loadTile(tile);
-      }
 
       if (tile.state === "loaded" && tile.loadOpacity < 1) {
         tile.loadOpacity = Math.min(1, tile.loadOpacity + dt * 2.5);

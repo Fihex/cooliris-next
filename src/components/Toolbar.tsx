@@ -1,4 +1,4 @@
-import { useRef } from "react";
+import { useState } from "react";
 
 export interface LoadProgress {
   loaded: number;
@@ -14,26 +14,18 @@ interface ToolbarProps {
   slideshow: boolean;
   titles: boolean;
   search: string;
-  fsAccess: boolean;
-  onOpenFiles: (files: File[]) => void;
-  onOpenFilePicker: () => void;
-  onOpenFolderPicker: () => void;
-  onLoadUrl: (url: string) => void;
+  fromDate: string;
+  toDate: string;
+  onOpen: () => void;
   onSearch: (q: string) => void;
+  onFromDate: (d: string) => void;
+  onToDate: (d: string) => void;
   onToggleSlideshow: () => void;
   onToggleTitles: () => void;
   onFullscreen: () => void;
 }
 
 export function Toolbar(props: ToolbarProps) {
-  const fileInput = useRef<HTMLInputElement>(null);
-  const folderInput = useRef<HTMLInputElement>(null);
-
-  const promptUrl = () => {
-    const url = window.prompt("Load a JSON manifest URL:", "/sample-feed.json");
-    if (url) props.onLoadUrl(url.trim());
-  };
-
   const stillLoading = props.busy || props.progress.pending > 0;
 
   return (
@@ -43,18 +35,7 @@ export function Toolbar(props: ToolbarProps) {
         <span className="text-lg font-light text-white/50">Next</span>
       </div>
 
-      {props.fsAccess ? (
-        <>
-          <Btn onClick={props.onOpenFilePicker}>Open files</Btn>
-          <Btn onClick={props.onOpenFolderPicker}>Open folder</Btn>
-        </>
-      ) : (
-        <>
-          <Btn onClick={() => fileInput.current?.click()}>Open files</Btn>
-          <Btn onClick={() => folderInput.current?.click()}>Open folder</Btn>
-        </>
-      )}
-      <Btn onClick={promptUrl}>Load JSON URL</Btn>
+      <Btn onClick={props.onOpen}>Open</Btn>
 
       <div className="mx-1 h-5 w-px bg-white/15" />
 
@@ -64,6 +45,12 @@ export function Toolbar(props: ToolbarProps) {
       <Btn onClick={props.onToggleTitles} active={props.titles}>
         Titles
       </Btn>
+      <DatesMenu
+        from={props.fromDate}
+        to={props.toDate}
+        onFrom={props.onFromDate}
+        onTo={props.onToDate}
+      />
       <Btn onClick={props.onFullscreen}>Fullscreen</Btn>
 
       <div className="ml-auto flex items-center gap-3">
@@ -95,33 +82,73 @@ export function Toolbar(props: ToolbarProps) {
           )}
         </div>
       </div>
-
-      {/* Hidden fallback inputs for browsers without File System Access API. */}
-      <input
-        ref={fileInput}
-        type="file"
-        multiple
-        accept="image/*,video/*"
-        className="hidden"
-        onChange={(e) => {
-          if (e.target.files) props.onOpenFiles(Array.from(e.target.files));
-          e.target.value = "";
-        }}
-      />
-      <input
-        ref={folderInput}
-        type="file"
-        // @ts-expect-error non-standard but widely supported
-        webkitdirectory=""
-        directory=""
-        multiple
-        className="hidden"
-        onChange={(e) => {
-          if (e.target.files) props.onOpenFiles(Array.from(e.target.files));
-          e.target.value = "";
-        }}
-      />
     </header>
+  );
+}
+
+/** Date-range filter popover (filters by file last-modified date). */
+function DatesMenu({
+  from,
+  to,
+  onFrom,
+  onTo,
+}: {
+  from: string;
+  to: string;
+  onFrom: (d: string) => void;
+  onTo: (d: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const active = !!(from || to);
+  return (
+    <div className="relative">
+      <Btn onClick={() => setOpen((o) => !o)} active={active || open}>
+        Dates{active ? " •" : ""}
+      </Btn>
+      {open && (
+        <>
+          <div className="fixed inset-0 z-30" onClick={() => setOpen(false)} />
+          <div className="absolute left-0 top-full z-40 mt-1 w-56 rounded-xl bg-neutral-900 p-3 text-sm shadow-2xl ring-1 ring-white/10">
+            <label className="mb-1 block text-xs text-white/50">From</label>
+            <input
+              type="date"
+              value={from}
+              max={to || undefined}
+              onChange={(e) => onFrom(e.target.value)}
+              className="mb-3 w-full rounded-lg bg-white/10 px-2 py-1.5 text-white outline-none ring-white/20 focus:ring-2 [color-scheme:dark]"
+            />
+            <label className="mb-1 block text-xs text-white/50">To</label>
+            <input
+              type="date"
+              value={to}
+              min={from || undefined}
+              onChange={(e) => onTo(e.target.value)}
+              className="w-full rounded-lg bg-white/10 px-2 py-1.5 text-white outline-none ring-white/20 focus:ring-2 [color-scheme:dark]"
+            />
+            <div className="mt-3 flex items-center justify-between">
+              <button
+                onClick={() => {
+                  onFrom("");
+                  onTo("");
+                }}
+                className="text-xs text-white/50 hover:text-white"
+              >
+                Clear
+              </button>
+              <button
+                onClick={() => setOpen(false)}
+                className="rounded-lg bg-white/15 px-3 py-1 text-xs font-medium hover:bg-white/25"
+              >
+                Done
+              </button>
+            </div>
+            <p className="mt-2 text-[10px] leading-tight text-white/35">
+              Filters by file last-modified date (browsers don't expose created date).
+            </p>
+          </div>
+        </>
+      )}
+    </div>
   );
 }
 

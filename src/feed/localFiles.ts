@@ -40,19 +40,27 @@ export function revokeLocalUrls(): void {
 async function mapPool<T, R>(
   items: T[],
   limit: number,
-  fn: (item: T, index: number) => Promise<R>
+  fn: (item: T, index: number) => Promise<R>,
+  onProgress?: (done: number, total: number) => void
 ): Promise<R[]> {
   const results = new Array<R>(items.length);
   let cursor = 0;
-  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
-    while (cursor < items.length) {
+  let done = 0;
+  const total = items.length;
+  const workers = Array.from({ length: Math.min(limit, total) }, async () => {
+    while (cursor < total) {
       const i = cursor++;
       results[i] = await fn(items[i], i);
+      done++;
+      if (onProgress && (done % 64 === 0 || done === total)) onProgress(done, total);
     }
   });
   await Promise.all(workers);
   return results;
 }
+
+/** Optional progress reporter passed to the folder/file loaders. */
+export type ProgressFn = (done: number, total: number) => void;
 
 /** Capture the first frame of a video File as a poster thumbnail (object URL). */
 async function makeVideoThumb(fullUrl: string): Promise<string | null> {
@@ -105,6 +113,7 @@ async function fileToItem(file: File, pathHint?: string): Promise<MediaItem> {
   const fullUrl = track(URL.createObjectURL(file));
   const path = pathHint ?? file.name; // relative path within the opened folder
   const title = file.name.replace(/\.[^.]+$/, ""); // bare filename (no folders)
+  const date = file.lastModified || undefined;
   if (isVideo(file.name)) {
     const poster = await makeVideoThumb(fullUrl);
     return {
@@ -114,6 +123,7 @@ async function fileToItem(file: File, pathHint?: string): Promise<MediaItem> {
       full: fullUrl,
       title,
       path,
+      date,
     };
   }
   return {
@@ -123,18 +133,24 @@ async function fileToItem(file: File, pathHint?: string): Promise<MediaItem> {
     full: fullUrl,
     title,
     path,
+    date,
   };
 }
 
 /** Build a Feed from a flat list of File objects (input[multiple] / drag-drop). */
-export async function feedFromFiles(files: File[]): Promise<Feed> {
+export async function feedFromFiles(files: File[], onProgress?: ProgressFn): Promise<Feed> {
   const media = files.filter((f) => isMedia(f.name));
   // Stable, human-friendly order.
   media.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
-  const items = await mapPool(media, 6, (f) => {
-    const rel = (f as unknown as { _path?: string; webkitRelativePath?: string });
-    return fileToItem(f, rel._path || rel.webkitRelativePath || f.name);
-  });
+  const items = await mapPool(
+    media,
+    6,
+    (f) => {
+      const rel = (f as unknown as { _path?: string; webkitRelativePath?: string });
+      return fileToItem(f, rel._path || rel.webkitRelativePath || f.name);
+    },
+    onProgress
+  );
   return { title: `${items.length} local file(s)`, items };
 }
 
@@ -164,35 +180,43 @@ export const supportsFsAccess = () =>
 async function collectDir(
   dir: FSDirHandle,
   prefix: string,
-  out: { file: File; path: string }[]
+  out: { file: File; path: string }[],
+  onCount?: (n: number) => void
 ): Promise<void> {
   for await (const entry of dir.values()) {
     const path = prefix ? `${prefix}/${entry.name}` : entry.name;
     if (entry.kind === "file") {
-      if (isMedia(entry.name)) out.push({ file: await entry.getFile(), path });
+      if (isMedia(entry.name)) {
+        out.push({ file: await entry.getFile(), path });
+        if (onCount && out.length % 50 === 0) onCount(out.length);
+      }
     } else {
-      await collectDir(entry, path, out);
+      await collectDir(entry, path, out, onCount);
     }
   }
 }
 
 /** Open a folder via the File System Access API and recurse into subfolders. */
-export async function feedFromDirectoryPicker(): Promise<Feed> {
+export async function feedFromDirectoryPicker(onProgress?: ProgressFn): Promise<Feed> {
   if (!window.showDirectoryPicker) throw new Error("Directory picker unsupported.");
   const dir = await window.showDirectoryPicker();
   const collected: { file: File; path: string }[] = [];
-  await collectDir(dir, "", collected);
+  // total is unknown while scanning → report (n, 0) so the UI can show "Scanning N".
+  await collectDir(dir, "", collected, (n) => onProgress?.(n, 0));
   collected.sort((a, b) =>
     a.path.localeCompare(b.path, undefined, { numeric: true })
   );
-  const items = await mapPool(collected, 6, ({ file, path }) =>
-    fileToItem(file, path)
+  const items = await mapPool(
+    collected,
+    6,
+    ({ file, path }) => fileToItem(file, path),
+    onProgress
   );
   return { title: `${dir.name} — ${items.length} item(s)`, items };
 }
 
 /** Open one or more files via the File System Access API. */
-export async function feedFromFilePicker(): Promise<Feed> {
+export async function feedFromFilePicker(onProgress?: ProgressFn): Promise<Feed> {
   if (!window.showOpenFilePicker) throw new Error("File picker unsupported.");
   const handles = await window.showOpenFilePicker({
     multiple: true,
@@ -207,11 +231,11 @@ export async function feedFromFilePicker(): Promise<Feed> {
     ],
   });
   const files = await Promise.all(handles.map((h) => h.getFile()));
-  return feedFromFiles(files);
+  return feedFromFiles(files, onProgress);
 }
 
 /** Extract Files from a drag-and-drop DataTransfer, recursing into folders. */
-export async function feedFromDataTransfer(dt: DataTransfer): Promise<Feed> {
+export async function feedFromDataTransfer(dt: DataTransfer, onProgress?: ProgressFn): Promise<Feed> {
   const files: File[] = [];
 
   const readEntry = async (entry: any, prefix = ""): Promise<void> => {
@@ -243,7 +267,7 @@ export async function feedFromDataTransfer(dt: DataTransfer): Promise<Feed> {
   if (canRecurse) {
     const entries = items.map((i) => (i as any).webkitGetAsEntry());
     for (const entry of entries) await readEntry(entry);
-    return feedFromFiles(files);
+    return feedFromFiles(files, onProgress);
   }
-  return feedFromFiles(Array.from(dt.files));
+  return feedFromFiles(Array.from(dt.files), onProgress);
 }

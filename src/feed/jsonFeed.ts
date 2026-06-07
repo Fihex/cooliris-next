@@ -3,6 +3,16 @@ import type { Feed, JsonFeed, MediaItem } from "./types";
 let autoId = 0;
 const nextId = () => `item-${Date.now().toString(36)}-${autoId++}`;
 
+/** Parse a date from a number (epoch ms) or a date string into epoch ms. */
+function parseDate(raw: unknown): number | undefined {
+  if (typeof raw === "number") return raw;
+  if (typeof raw === "string") {
+    const t = Date.parse(raw);
+    if (!Number.isNaN(t)) return t;
+  }
+  return undefined;
+}
+
 /** Normalize a loosely-typed JSON record into a MediaItem. */
 function normalizeItem(raw: unknown): MediaItem | null {
   if (!raw || typeof raw !== "object") return null;
@@ -33,6 +43,7 @@ function normalizeItem(raw: unknown): MediaItem | null {
     full: full ?? thumb,
     title: (r.title as string) ?? (r.name as string),
     path: (r.path as string) ?? undefined,
+    date: parseDate(r.date ?? r.taken ?? r.timestamp),
     link: (r.link as string) ?? (r.href as string),
     aspect: typeof r.aspect === "number" ? (r.aspect as number) : undefined,
   };
@@ -48,13 +59,32 @@ export function parseJsonFeed(data: JsonFeed): Feed {
   return { title, items };
 }
 
-/** Load and parse a JSON manifest from a URL. */
-export async function loadJsonFeedFromUrl(url: string): Promise<Feed> {
+async function fetchJson(url: string): Promise<JsonFeed> {
   const res = await fetch(url, { headers: { Accept: "application/json" } });
-  if (!res.ok) {
-    throw new Error(`Failed to load feed (${res.status} ${res.statusText})`);
+  if (!res.ok) throw new Error(`Failed to load feed (${res.status} ${res.statusText})`);
+  return (await res.json()) as JsonFeed;
+}
+
+/**
+ * Load a JSON manifest from a URL. Tries a direct fetch first; if that fails
+ * (typically a cross-site CORS block), it retries through a public CORS proxy so
+ * feeds hosted on other websites still work.
+ */
+export async function loadJsonFeedFromUrl(url: string): Promise<Feed> {
+  let data: JsonFeed;
+  try {
+    data = await fetchJson(url);
+  } catch (direct) {
+    if (/^https?:\/\//i.test(url)) {
+      try {
+        data = await fetchJson(`https://corsproxy.io/?url=${encodeURIComponent(url)}`);
+      } catch {
+        throw direct instanceof Error ? direct : new Error(String(direct));
+      }
+    } else {
+      throw direct instanceof Error ? direct : new Error(String(direct));
+    }
   }
-  const data = (await res.json()) as JsonFeed;
   const feed = parseJsonFeed(data);
   if (feed.items.length === 0) throw new Error("Feed contained no media items.");
   return feed;
@@ -62,8 +92,18 @@ export async function loadJsonFeedFromUrl(url: string): Promise<Feed> {
 
 /** Parse a JSON manifest from a pasted string. */
 export function loadJsonFeedFromText(text: string): Feed {
-  const data = JSON.parse(text) as JsonFeed;
+  let data: JsonFeed;
+  try {
+    data = JSON.parse(text) as JsonFeed;
+  } catch {
+    throw new Error("That isn't valid JSON.");
+  }
   const feed = parseJsonFeed(data);
   if (feed.items.length === 0) throw new Error("Feed contained no media items.");
   return feed;
+}
+
+/** Read and parse a local .json file (no network needed). */
+export async function loadJsonFeedFromFile(file: File): Promise<Feed> {
+  return loadJsonFeedFromText(await file.text());
 }
