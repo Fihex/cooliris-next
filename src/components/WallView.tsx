@@ -20,6 +20,8 @@ import { embed, type WallController } from "@/embed/cooliris-embed";
 import { Toolbar, type LoadProgress } from "./Toolbar";
 import { OpenDialog } from "./OpenDialog";
 import { JsonDialog } from "./JsonDialog";
+import { SettingsDialog } from "./SettingsDialog";
+import { Lightbox } from "./Lightbox";
 import { Scrubber, type ScrubberHandle } from "./Scrubber";
 import { Toasts, type ToastMessage } from "./Toast";
 
@@ -33,15 +35,20 @@ export function WallView() {
   const searchRef = useRef("");
   const fromRef = useRef(""); // yyyy-mm-dd
   const toRef = useRef("");
+  const feedToken = useRef(0); // only the most recent open() applies its result
 
   const [items, setItems] = useState<MediaItem[]>([]);
   const [feedTitle, setFeedTitle] = useState<string>();
   const [selected, setSelected] = useState(-1);
+  const [closingItem, setClosingItem] = useState<MediaItem | null>(null); // fading viewer
+  const closeTimer = useRef<number | null>(null);
   const [busy, setBusy] = useState(false);
   const [slideshow, setSlideshow] = useState(false);
   const [showTitles, setShowTitles] = useState(false);
+  const [gifAnim, setGifAnim] = useState(false);
   const [jsonOpen, setJsonOpen] = useState(false);
   const [openOpen, setOpenOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [loadStage, setLoadStage] = useState<{ done: number; total: number } | null>(null);
   const [search, setSearch] = useState("");
   const [fromDate, setFromDate] = useState("");
@@ -60,8 +67,8 @@ export function WallView() {
   // Combined filter: search text + last-modified date range.
   const applyFilters = useCallback(() => {
     const query = searchRef.current.trim().toLowerCase();
-    const fromMs = fromRef.current ? new Date(fromRef.current + "T00:00:00").getTime() : null;
-    const toMs = toRef.current ? new Date(toRef.current + "T23:59:59.999").getTime() : null;
+    const fromMs = parseDayInput(fromRef.current, false);
+    const toMs = parseDayInput(toRef.current, true);
     const hasDate = fromMs !== null || toMs !== null;
     const filtered = masterRef.current.filter((it) => {
       if (query && !(it.title ?? "").toLowerCase().includes(query)) return false;
@@ -97,14 +104,18 @@ export function WallView() {
 
   const runFeedTask = useCallback(
     async (task: (onProgress: (done: number, total: number) => void) => Promise<Feed>) => {
+      const token = ++feedToken.current; // supersede any in-flight open
       setBusy(true);
       setLoadStage(null);
       // Snapshot the previous feed's object URLs; revoke them only AFTER the new
       // feed (with its own freshly-created URLs) has loaded successfully.
       const oldUrls = currentLocalUrls();
-      const onProgress = (done: number, total: number) => setLoadStage({ done, total });
+      const onProgress = (done: number, total: number) => {
+        if (token === feedToken.current) setLoadStage({ done, total });
+      };
       try {
         const feed = await task(onProgress);
+        if (token !== feedToken.current) return; // a newer open started — drop this one
         applyFeed(feed);
         revokeUrls(oldUrls);
         toast(`Loaded ${feed.items.length} item(s)`);
@@ -114,8 +125,10 @@ export function WallView() {
         toast(msg, "error");
         embed.callbacks.feederror?.(msg);
       } finally {
-        setBusy(false);
-        setLoadStage(null);
+        if (token === feedToken.current) {
+          setBusy(false);
+          setLoadStage(null);
+        }
       }
     },
     [applyFeed, toast]
@@ -124,6 +137,9 @@ export function WallView() {
   /* ---------------------------- create the scene ---------------------------- */
   useEffect(() => {
     if (!containerRef.current) return;
+    // Guard against a leftover canvas (e.g. React StrictMode double-mount) so we
+    // never end up with two overlaid walls.
+    containerRef.current.replaceChildren();
     let scene: WallScene;
     try {
       scene = new WallScene(containerRef.current);
@@ -191,25 +207,17 @@ export function WallView() {
   }, [items.length]);
 
   /* ------------------------------- keyboard -------------------------------- */
+  // Arrow keys scroll the wall while browsing (the Lightbox owns its own keys
+  // — Esc / ← / → — while an item is open).
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
-      const scene = sceneRef.current;
-      if (!scene) return;
-      if (e.key === "Escape") {
-        scene.deselect();
-      } else if (e.key === "ArrowRight") {
-        if (selected >= 0) {
-          if (!e.repeat) scene.next();
-        } else scene.startScroll(1); // hold = smooth accelerate
-      } else if (e.key === "ArrowLeft") {
-        if (selected >= 0) {
-          if (!e.repeat) scene.prev();
-        } else scene.startScroll(-1);
-      }
+      if (selected >= 0) return;
+      if (e.key === "ArrowRight") sceneRef.current?.startScroll(1);
+      else if (e.key === "ArrowLeft") sceneRef.current?.startScroll(-1);
     };
     const onKeyUp = (e: KeyboardEvent) => {
       if ((e.key === "ArrowRight" || e.key === "ArrowLeft") && selected < 0) {
-        sceneRef.current?.stopScroll(); // release = smooth momentum stop
+        sceneRef.current?.stopScroll();
       }
     };
     window.addEventListener("keydown", onKeyDown);
@@ -221,6 +229,18 @@ export function WallView() {
   }, [selected]);
 
   /* ------------------------------ handlers --------------------------------- */
+  // Smooth close: reveal the wall (already scrolled to the last-viewed item) and
+  // fade the viewer out over it, then unmount.
+  const closeViewer = () => {
+    const cur = selected >= 0 ? items[selected] : null;
+    sceneRef.current?.deselect();
+    if (cur) {
+      setClosingItem(cur);
+      if (closeTimer.current) clearTimeout(closeTimer.current);
+      closeTimer.current = window.setTimeout(() => setClosingItem(null), 220);
+    }
+  };
+
   const toggleSlideshow = () => {
     const next = !slideshow;
     setSlideshow(next);
@@ -237,6 +257,12 @@ export function WallView() {
     const next = !showTitles;
     setShowTitles(next);
     sceneRef.current?.setShowTitles(next);
+  };
+
+  const toggleGifAnim = () => {
+    const next = !gifAnim;
+    setGifAnim(next);
+    sceneRef.current?.setGifAnim(next);
   };
 
   const onPointerMove = (e: React.PointerEvent) => {
@@ -274,7 +300,6 @@ export function WallView() {
           busy={busy}
           progress={progress}
           slideshow={slideshow}
-          titles={showTitles}
           search={search}
           fromDate={fromDate}
           toDate={toDate}
@@ -295,7 +320,7 @@ export function WallView() {
             applyFilters();
           }}
           onToggleSlideshow={toggleSlideshow}
-          onToggleTitles={toggleTitles}
+          onOpenSettings={() => setSettingsOpen(true)}
           onFullscreen={fullscreen}
         />
       )}
@@ -367,70 +392,18 @@ export function WallView() {
       {/* Bottom scrubber (visual only — input handled by the wall's scrub zone) */}
       {selected < 0 && items.length > 0 && <Scrubber ref={scrubberRef} />}
 
-      {/* Focused (zoomed) view */}
-      {selectedItem && (
-        <>
-          <button
-            onClick={() => sceneRef.current?.deselect()}
-            className="absolute left-4 top-4 z-40 rounded-full bg-white/10 px-3 py-1.5 text-sm text-white backdrop-blur hover:bg-white/20"
-          >
-            ← Back
-          </button>
-
-          {/* Videos play large on a dark backdrop; click the backdrop to exit. */}
-          {selectedItem.type === "video" && (
-            <div
-              className="absolute inset-0 z-20 flex items-center justify-center bg-black/85 px-20 pb-24 pt-16"
-              onClick={() => sceneRef.current?.deselect()}
-            >
-              <video
-                key={selectedItem.id}
-                src={selectedItem.full}
-                controls
-                autoPlay
-                onClick={(e) => e.stopPropagation()}
-                className="max-h-full max-w-full rounded-lg object-contain shadow-2xl"
-              />
-            </div>
-          )}
-
-          {/* Permanent prev/next at the edges (fixed position; photos AND videos) */}
-          <FocusArrow side="left" onClick={() => sceneRef.current?.prev()} />
-          <FocusArrow side="right" onClick={() => sceneRef.current?.next()} />
-
-          {/* Caption pinned to the very bottom — info only, wraps if long */}
-          <div className="pointer-events-none absolute inset-x-0 bottom-3 z-30 flex justify-center px-20">
-            <div className="pointer-events-auto max-h-36 max-w-[60vw] overflow-y-auto rounded-2xl bg-black/70 px-5 py-2 text-center backdrop-blur ring-1 ring-white/10">
-              <div className="text-sm font-medium text-white [overflow-wrap:anywhere]">
-                {selectedItem.title || "Untitled"}
-                {selectedItem.link && (
-                  <a
-                    href={selectedItem.link}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="ml-2 text-white/60 hover:text-white"
-                  >
-                    ↗
-                  </a>
-                )}
-              </div>
-              {selectedItem.path && (
-                <button
-                  type="button"
-                  title="Click to copy path"
-                  onClick={() => navigator.clipboard?.writeText(selectedItem.path ?? "")}
-                  className="block w-full text-xs text-white/55 [overflow-wrap:anywhere] hover:text-white/80"
-                >
-                  {selectedItem.path}
-                </button>
-              )}
-              <div className="text-xs text-white/40">
-                {selected + 1} / {items.length}
-                {selectedItem.date ? ` · ${new Date(selectedItem.date).toLocaleDateString()}` : ""}
-              </div>
-            </div>
-          </div>
-        </>
+      {/* Focused viewer (opaque lightbox: zoom/pan, no residue behind). Kept
+          mounted briefly after close (closingItem) so it can fade out smoothly. */}
+      {(selectedItem || closingItem) && (
+        <Lightbox
+          item={(selectedItem ?? closingItem)!}
+          index={selected >= 0 ? selected : 0}
+          total={items.length}
+          closing={!selectedItem}
+          onClose={closeViewer}
+          onPrev={() => sceneRef.current?.prev()}
+          onNext={() => sceneRef.current?.next()}
+        />
       )}
 
       {openOpen && (
@@ -457,6 +430,16 @@ export function WallView() {
             setOpenOpen(false);
             setJsonOpen(true);
           }}
+        />
+      )}
+
+      {settingsOpen && (
+        <SettingsDialog
+          titles={showTitles}
+          gifAnim={gifAnim}
+          onClose={() => setSettingsOpen(false)}
+          onToggleTitles={toggleTitles}
+          onToggleGifAnim={toggleGifAnim}
         />
       )}
 
@@ -509,17 +492,21 @@ function EdgeArrow({
   );
 }
 
-/** Permanent prev/next arrow at a screen edge while a photo/video is focused. */
-function FocusArrow({ side, onClick }: { side: "left" | "right"; onClick: () => void }) {
-  return (
-    <button
-      onClick={onClick}
-      aria-label={side === "left" ? "Previous" : "Next"}
-      className={`absolute top-1/2 z-40 flex h-16 w-16 -translate-y-1/2 items-center justify-center rounded-full bg-black/40 text-4xl text-white/80 backdrop-blur transition hover:bg-black/60 hover:text-white ${
-        side === "left" ? "left-4" : "right-4"
-      }`}
-    >
-      {side === "left" ? "‹" : "›"}
-    </button>
-  );
+/** Parse a typed date ("YYYY-MM-DD" or anything Date.parse accepts) to epoch ms. */
+function parseDayInput(value: string, endOfDay: boolean): number | null {
+  const v = value.trim();
+  if (!v) return null;
+  const m = /^(\d{4})-(\d{1,2})-(\d{1,2})$/.exec(v);
+  let d: Date;
+  if (m) {
+    d = new Date(+m[1], +m[2] - 1, +m[3]);
+  } else {
+    const t = Date.parse(v);
+    if (Number.isNaN(t)) return null;
+    d = new Date(t);
+  }
+  if (endOfDay) d.setHours(23, 59, 59, 999);
+  else d.setHours(0, 0, 0, 0);
+  return d.getTime();
 }
+

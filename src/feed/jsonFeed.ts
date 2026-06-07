@@ -39,6 +39,7 @@ function normalizeItem(raw: unknown): MediaItem | null {
   return {
     id: (r.id as string) ?? (r.guid as string) ?? nextId(),
     type: looksVideo ? "video" : "image",
+    animated: !looksVideo && /\.gif(\?|$)/i.test(full ?? "") ? true : undefined,
     thumb: thumb ?? full,
     full: full ?? thumb,
     title: (r.title as string) ?? (r.name as string),

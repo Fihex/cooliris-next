@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 
 export interface LoadProgress {
   loaded: number;
@@ -12,7 +12,6 @@ interface ToolbarProps {
   busy: boolean;
   progress: LoadProgress;
   slideshow: boolean;
-  titles: boolean;
   search: string;
   fromDate: string;
   toDate: string;
@@ -21,7 +20,7 @@ interface ToolbarProps {
   onFromDate: (d: string) => void;
   onToDate: (d: string) => void;
   onToggleSlideshow: () => void;
-  onToggleTitles: () => void;
+  onOpenSettings: () => void;
   onFullscreen: () => void;
 }
 
@@ -42,18 +41,17 @@ export function Toolbar(props: ToolbarProps) {
       <Btn onClick={props.onToggleSlideshow} active={props.slideshow}>
         {props.slideshow ? "Stop" : "Slideshow"}
       </Btn>
-      <Btn onClick={props.onToggleTitles} active={props.titles}>
-        Titles
-      </Btn>
-      <DatesMenu
-        from={props.fromDate}
-        to={props.toDate}
-        onFrom={props.onFromDate}
-        onTo={props.onToDate}
-      />
       <Btn onClick={props.onFullscreen}>Fullscreen</Btn>
 
-      <div className="ml-auto flex items-center gap-3">
+      <div className="ml-auto flex items-center gap-2">
+        <Btn onClick={props.onOpenSettings}>⚙ Settings</Btn>
+        <DatesMenu
+          from={props.fromDate}
+          to={props.toDate}
+          onFrom={props.onFromDate}
+          onTo={props.onToDate}
+        />
+
         {/* Search */}
         <div className="relative">
           <input
@@ -86,6 +84,47 @@ export function Toolbar(props: ToolbarProps) {
   );
 }
 
+/** A date input you can BOTH type (YYYY-MM-DD) and pick from a calendar. */
+function DateField({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  const picker = useRef<HTMLInputElement>(null);
+  const ymd = /^\d{4}-\d{2}-\d{2}$/.test(value) ? value : "";
+  return (
+    <div className="relative">
+      <input
+        type="text"
+        inputMode="numeric"
+        value={value}
+        placeholder="YYYY-MM-DD"
+        onChange={(e) => onChange(e.target.value)}
+        className="w-full rounded-lg bg-white/10 px-2 py-1.5 pr-9 text-white placeholder-white/30 outline-none ring-white/20 focus:ring-2"
+      />
+      <button
+        type="button"
+        aria-label="Pick a date"
+        onClick={() => {
+          const el = picker.current;
+          if (!el) return;
+          if (el.showPicker) el.showPicker();
+          else el.focus();
+        }}
+        className="absolute right-1 top-1/2 -translate-y-1/2 rounded px-1 py-0.5 text-white/60 hover:text-white"
+      >
+        📅
+      </button>
+      {/* Hidden native date input — only used to open the calendar picker. */}
+      <input
+        ref={picker}
+        type="date"
+        value={ymd}
+        tabIndex={-1}
+        aria-hidden
+        onChange={(e) => onChange(e.target.value)}
+        className="pointer-events-none absolute right-2 top-1/2 h-px w-px -translate-y-1/2 opacity-0 [color-scheme:dark]"
+      />
+    </div>
+  );
+}
+
 /** Date-range filter popover (filters by file last-modified date). */
 function DatesMenu({
   from,
@@ -108,36 +147,27 @@ function DatesMenu({
       {open && (
         <>
           <div className="fixed inset-0 z-30" onClick={() => setOpen(false)} />
-          <div className="absolute left-0 top-full z-40 mt-1 w-56 rounded-xl bg-neutral-900 p-3 text-sm shadow-2xl ring-1 ring-white/10">
+          <div className="absolute right-0 top-full z-40 mt-1 w-56 rounded-xl bg-neutral-900 p-3 text-sm shadow-2xl ring-1 ring-white/10">
             <label className="mb-1 block text-xs text-white/50">From</label>
-            <input
-              type="date"
-              value={from}
-              max={to || undefined}
-              onChange={(e) => onFrom(e.target.value)}
-              className="mb-3 w-full rounded-lg bg-white/10 px-2 py-1.5 text-white outline-none ring-white/20 focus:ring-2 [color-scheme:dark]"
-            />
+            <div className="mb-3">
+              <DateField value={from} onChange={onFrom} />
+            </div>
             <label className="mb-1 block text-xs text-white/50">To</label>
-            <input
-              type="date"
-              value={to}
-              min={from || undefined}
-              onChange={(e) => onTo(e.target.value)}
-              className="w-full rounded-lg bg-white/10 px-2 py-1.5 text-white outline-none ring-white/20 focus:ring-2 [color-scheme:dark]"
-            />
-            <div className="mt-3 flex items-center justify-between">
+            <DateField value={to} onChange={onTo} />
+            <div className="mt-3 flex items-center justify-between gap-2">
               <button
                 onClick={() => {
                   onFrom("");
                   onTo("");
                 }}
-                className="text-xs text-white/50 hover:text-white"
+                disabled={!active}
+                className="rounded-lg bg-white/10 px-3 py-1 text-xs font-medium text-white hover:bg-white/20 disabled:cursor-not-allowed disabled:opacity-40"
               >
-                Clear
+                Clear dates
               </button>
               <button
                 onClick={() => setOpen(false)}
-                className="rounded-lg bg-white/15 px-3 py-1 text-xs font-medium hover:bg-white/25"
+                className="rounded-lg bg-white px-3 py-1 text-xs font-medium text-black hover:bg-white/90"
               >
                 Done
               </button>

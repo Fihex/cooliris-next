@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import type { MediaItem } from "@/feed/types";
+import { GifController, type GifTile } from "@/gifsAnimation/GifController";
 
 /* Layout — a 3-row wall of aspect-preserving tiles that scrolls horizontally. */
 const ROWS = 3;
@@ -48,6 +49,7 @@ interface Tile {
   fullLoaded: boolean;
   label?: THREE.Sprite; // title label (when "show titles" is on)
 }
+
 
 export interface ScrollInfo {
   fraction: number;
@@ -115,9 +117,18 @@ export class WallScene {
   private slideshow = false;
   private slideshowTimer = 0;
   private showTitles = false;
+  // GIF wall-animation lives entirely in src/gifsAnimation.
+  private gifs = new GifController(() => this.generation);
+
+  // Web Worker pool: off-main-thread decode + downscale of local images.
+  private workers: Worker[] = [];
+  private workerNext = 0;
+  private workerJobId = 0;
+  private workerJobs = new Map<number, { resolve: (b: ImageBitmap) => void; reject: (e: unknown) => void }>();
 
   private loadedCount = 0;
   private pendingCount = 0;
+  private generation = 0; // bumped on setItems; stale async work is discarded
 
   private listeners: Record<WallEvent, Cb[]> = {
     select: [], deselect: [], hover: [], scroll: [], progress: [],
@@ -125,7 +136,7 @@ export class WallScene {
 
   private running = true;
   private resizeObserver: ResizeObserver;
-  private clock = new THREE.Clock();
+  private lastTick = 0;
 
   constructor(container: HTMLElement) {
     this.container = container;
@@ -176,6 +187,7 @@ export class WallScene {
   /* -------------------------------- public API -------------------------------- */
 
   setItems(items: MediaItem[]): void {
+    this.generation++; // invalidate any in-flight decodes from the previous feed
     this.clearTiles();
     this.items = items;
     this.loadedCount = 0;
@@ -222,6 +234,12 @@ export class WallScene {
 
   deselect(): void {
     if (this.selectedIndex === -1) return;
+    // Leave the wall centered on the item you were last viewing (not where you
+    // opened from), then reveal it.
+    const baseX = Math.floor(this.selectedIndex / ROWS) * CELL_W;
+    this.scrollX = clamp(baseX, this.scrollMin, this.scrollMax);
+    this.camX = 0;
+    this.velocity = 0;
     this.selectedIndex = -1;
     this.focusTarget = 0;
     this.emit("deselect", -1);
@@ -249,6 +267,11 @@ export class WallScene {
     if (!on) {
       for (const tile of this.tiles) if (tile?.label) tile.label.visible = false;
     }
+  }
+
+  /** Toggle live GIF playback on the wall (handled by the GifController). */
+  setGifAnim(on: boolean): void {
+    this.gifs.setEnabled(on);
   }
 
   /**
@@ -350,9 +373,13 @@ export class WallScene {
     el.removeEventListener("pointerleave", this.onPointerLeave);
     el.removeEventListener("contextmenu", this.onContextMenu);
     el.removeEventListener("mousedown", this.onMouseDown);
+    this.gifs.dispose();
     this.clearTiles();
     this.geo.dispose();
     this.reflGradient.dispose();
+    for (const w of this.workers) w.terminate();
+    this.workers = [];
+    this.workerJobs.clear();
     this.renderer.dispose();
     el.remove();
   }
@@ -486,10 +513,11 @@ export class WallScene {
     tile.state = "loading";
     this.pendingCount++;
     this.emitProgress();
+    const gen = this.generation;
     this.acquireTexture(item.thumb)
       .then((texture) => {
-        if (tile.state !== "loading") {
-          texture.dispose(); // tile was evicted / feed changed mid-load
+        if (gen !== this.generation || tile.state !== "loading") {
+          texture.dispose(); // feed changed or tile evicted mid-load — discard
           return;
         }
         this.applyTexture(tile, texture);
@@ -501,6 +529,7 @@ export class WallScene {
         this.emitProgress();
       })
       .catch(() => {
+        if (gen !== this.generation) return;
         if (tile.state === "loading") this.pendingCount--;
         tile.state = "error";
         tile.mesh.material.color.set(0x2a1518);
@@ -515,27 +544,62 @@ export class WallScene {
    */
   private async acquireTexture(url: string, maxEdge = 512): Promise<THREE.Texture> {
     if (url.startsWith("blob:") || url.startsWith("data:")) {
-      const blob = await (await fetch(url)).blob();
-      // Decode AND downscale off the main thread (resizeWidth preserves aspect),
-      // then use the ImageBitmap directly — no canvas draw, smaller GPU upload.
-      // This is what keeps scrolling smooth while thumbnails stream in.
-      let bmp: ImageBitmap;
+      // 1) Decode + downscale in a Web Worker (off the main thread entirely).
       try {
-        bmp = await createImageBitmap(blob, {
+        const bmp = await this.workerDecode(url, maxEdge);
+        const tex = new THREE.Texture(bmp);
+        tex.flipY = false; // bitmap already oriented (imageOrientation:flipY)
+        tex.needsUpdate = true;
+        return tex;
+      } catch {
+        /* fall through to main-thread decode */
+      }
+      // 2) Main-thread createImageBitmap fallback.
+      try {
+        const blob = await (await fetch(url)).blob();
+        const bmp = await createImageBitmap(blob, {
           resizeWidth: maxEdge,
           resizeQuality: "medium",
           imageOrientation: "flipY",
         });
+        const tex = new THREE.Texture(bmp);
+        tex.flipY = false;
+        tex.needsUpdate = true;
+        return tex;
       } catch {
-        bmp = await createImageBitmap(blob); // older browsers: no resize options
+        // 3) Last resort (e.g. some GIFs): load via <img>, first frame.
+        return new Promise<THREE.Texture>((resolve, reject) => {
+          this.loader.load(url, resolve, undefined, reject);
+        });
       }
-      const tex = new THREE.Texture(bmp);
-      tex.flipY = false; // the bitmap is already oriented (imageOrientation:flipY)
-      tex.needsUpdate = true;
-      return tex;
     }
     return new Promise<THREE.Texture>((resolve, reject) => {
       this.loader.load(url, resolve, undefined, reject);
+    });
+  }
+
+  /** Decode + downscale an image URL in the worker pool; resolves an ImageBitmap. */
+  private workerDecode(url: string, maxEdge: number): Promise<ImageBitmap> {
+    if (this.workers.length === 0) {
+      const n = Math.max(2, Math.min(4, navigator.hardwareConcurrency || 4));
+      for (let i = 0; i < n; i++) {
+        const w = new Worker(new URL("./decodeWorker.ts", import.meta.url), { type: "module" });
+        w.onmessage = (e: MessageEvent<{ id: number; bitmap?: ImageBitmap; error?: string }>) => {
+          const job = this.workerJobs.get(e.data.id);
+          if (!job) return;
+          this.workerJobs.delete(e.data.id);
+          if (e.data.bitmap) job.resolve(e.data.bitmap);
+          else job.reject(new Error(e.data.error || "decode failed"));
+        };
+        this.workers.push(w);
+      }
+    }
+    const id = ++this.workerJobId;
+    const w = this.workers[this.workerNext];
+    this.workerNext = (this.workerNext + 1) % this.workers.length;
+    return new Promise<ImageBitmap>((resolve, reject) => {
+      this.workerJobs.set(id, { resolve, reject });
+      w.postMessage({ id, url, maxEdge });
     });
   }
 
@@ -546,6 +610,7 @@ export class WallScene {
     if (tile.state === "loading") this.pendingCount = Math.max(0, this.pendingCount - 1);
     if (tile.state === "loaded") this.loadedCount = Math.max(0, this.loadedCount - 1);
     tile.state = "error"; // makes any in-flight load discard its result
+    this.gifs.disposeTile(tile);
     const mat = tile.mesh.material;
     mat.map?.dispose();
     mat.dispose();
@@ -580,6 +645,7 @@ export class WallScene {
     // children one-by-one via strip.remove would be O(n²) and freeze.)
     for (const tile of this.tiles) {
       if (!tile) continue;
+      this.gifs.disposeTile(tile);
       const mat = tile.mesh.material;
       mat.map?.dispose();
       mat.dispose();
@@ -862,8 +928,13 @@ export class WallScene {
   private animate = () => {
     if (!this.running) return;
     requestAnimationFrame(this.animate);
-    const dt = Math.min(this.clock.getDelta(), 0.05);
-    const t = this.clock.elapsedTime;
+
+    // Render every frame (uncapped — matches the display, like before).
+    const now = performance.now();
+    if (!this.lastTick) this.lastTick = now;
+    const dt = Math.min((now - this.lastTick) / 1000, 0.05);
+    this.lastTick = now;
+    const t = now / 1000;
     const focused = this.selectedIndex >= 0;
 
     // Camera zoom (wheel) — pulls in when focused, restores the user's zoom after.
@@ -990,6 +1061,9 @@ export class WallScene {
     this.visStart = newStart;
     this.visEnd = newEnd;
 
+    // Collected for the GIF controller (see end of loop).
+    const visibleTiles: GifTile[] = [];
+
     // Streaming load: fill the visible columns sweeping in the travel direction,
     // plus a few lookahead columns ahead of you, capped by MAX_INFLIGHT so it
     // streams in *while scrolling* (one column at a time) without flooding the
@@ -1035,6 +1109,7 @@ export class WallScene {
     for (let i = newStart; i <= newEnd; i++) {
       const tile = this.ensureTile(i);
       tile.mesh.visible = true;
+      visibleTiles.push(tile);
 
       if (tile.state === "loaded" && tile.loadOpacity < 1) {
         tile.loadOpacity = Math.min(1, tile.loadOpacity + dt * 2.5);
@@ -1107,12 +1182,26 @@ export class WallScene {
       }
     }
 
+    // Wall GIF playback (all logic in src/gifsAnimation).
+    this.gifs.update({
+      focused,
+      velocity: this.velocity,
+      cullCenter,
+      rows: ROWS,
+      cellW: CELL_W,
+      now,
+      items: this.items,
+      visible: visibleTiles,
+    });
+
     if (this.slideshow && focused) {
       this.slideshowTimer += dt;
       if (this.slideshowTimer >= 4) { this.slideshowTimer = 0; this.next(); }
     }
 
-    this.renderer.render(this.scene, this.camera);
+    // While an item is open, the opaque lightbox covers the wall — stop rendering
+    // it entirely so all the GPU goes to the viewer.
+    if (!focused) this.renderer.render(this.scene, this.camera);
   };
 }
 

@@ -4,6 +4,8 @@ export interface MediaItem {
   id: string;
   /** "image" or "video". */
   type: "image" | "video";
+  /** True for animated images (GIF) — played as an <img> when opened. */
+  animated?: boolean;
   /** Thumbnail URL used for the wall tile. */
   thumb: string;
   /** Full-resolution image or video URL used in the detail view. */

@@ -129,6 +129,7 @@ async function fileToItem(file: File, pathHint?: string): Promise<MediaItem> {
   return {
     id: `local-${localId++}`,
     type: "image",
+    animated: /\.gif$/i.test(file.name) || undefined,
     thumb: fullUrl,
     full: fullUrl,
     title,
