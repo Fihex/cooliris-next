@@ -60,7 +60,7 @@ export function OpenDialog(props: OpenDialogProps) {
           }`}
         >
           <div className="text-sm font-medium">Drag &amp; drop files or a folder here</div>
-          <div className="mt-1 text-xs text-white/40">images and videos</div>
+          <div className="mt-1 text-xs text-white/40">images, videos, and audio</div>
         </div>
 
         <div className="flex gap-2">
@@ -74,7 +74,7 @@ export function OpenDialog(props: OpenDialogProps) {
           ref={fileInput}
           type="file"
           multiple
-          accept="image/*,video/*"
+          accept="image/*,video/*,audio/*"
           className="hidden"
           onChange={(e) => {
             if (e.target.files) props.onFiles(Array.from(e.target.files));

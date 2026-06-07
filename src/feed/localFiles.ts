@@ -1,11 +1,16 @@
-import type { Feed, MediaItem } from "./types";
+import type { Feed, MediaItem, ProgressFn } from "./types";
 
 const IMAGE_RE = /\.(jpe?g|png|gif|webp|avif|bmp|svg)$/i;
-const VIDEO_RE = /\.(mp4|webm|ogv|mov|m4v)$/i;
+// mkv/avi are listed so they appear on the wall; Chromium can't decode/poster
+// most of them, so they show as error ("broken") tiles. Real playback would need
+// an ffmpeg remux/transcode layer (desktop-only).
+const VIDEO_RE = /\.(mp4|webm|ogv|mov|m4v|mkv|avi)$/i;
+const AUDIO_RE = /\.(mp3|wav|ogg|oga|flac|m4a|aac|opus|weba)$/i;
 
-const isImage = (name: string) => IMAGE_RE.test(name);
-const isVideo = (name: string) => VIDEO_RE.test(name);
-const isMedia = (name: string) => isImage(name) || isVideo(name);
+export const isImage = (name: string) => IMAGE_RE.test(name);
+export const isVideo = (name: string) => VIDEO_RE.test(name);
+export const isAudio = (name: string) => AUDIO_RE.test(name);
+export const isMedia = (name: string) => isImage(name) || isVideo(name) || isAudio(name);
 
 let localId = 0;
 
@@ -37,7 +42,7 @@ export function revokeLocalUrls(): void {
 }
 
 /** Run async work with bounded concurrency so big folders don't stampede. */
-async function mapPool<T, R>(
+export async function mapPool<T, R>(
   items: T[],
   limit: number,
   fn: (item: T, index: number) => Promise<R>,
@@ -59,11 +64,9 @@ async function mapPool<T, R>(
   return results;
 }
 
-/** Optional progress reporter passed to the folder/file loaders. */
-export type ProgressFn = (done: number, total: number) => void;
 
 /** Capture the first frame of a video File as a poster thumbnail (object URL). */
-async function makeVideoThumb(fullUrl: string): Promise<string | null> {
+export async function makeVideoThumb(fullUrl: string): Promise<string | null> {
   return new Promise((resolve) => {
     const video = document.createElement("video");
     video.muted = true;
@@ -105,9 +108,45 @@ async function makeVideoThumb(fullUrl: string): Promise<string | null> {
   });
 }
 
+/** Draw a generic cover-art thumbnail for an audio file (no embedded artwork). */
+export async function makeAudioThumb(title: string): Promise<string | null> {
+  try {
+    const w = 512;
+    const h = 384;
+    const canvas = document.createElement("canvas");
+    canvas.width = w;
+    canvas.height = h;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return null;
+    const grad = ctx.createLinearGradient(0, 0, w, h);
+    grad.addColorStop(0, "#334155");
+    grad.addColorStop(1, "#0f172a");
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, w, h);
+    ctx.fillStyle = "rgba(255,255,255,0.92)";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.font = "160px system-ui, 'Segoe UI Symbol', sans-serif";
+    ctx.fillText("♪", w / 2, h / 2 - 24);
+    ctx.fillStyle = "rgba(255,255,255,0.7)";
+    ctx.font = "22px system-ui, sans-serif";
+    const label = title.length > 30 ? `${title.slice(0, 29)}…` : title;
+    ctx.fillText(label, w / 2, h - 52);
+    return await new Promise((resolve) =>
+      canvas.toBlob(
+        (blob) => resolve(blob ? track(URL.createObjectURL(blob)) : null),
+        "image/png"
+      )
+    );
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Build a MediaItem from a File. Images are *instant* (just an object URL —
- * the wall decodes/loads them lazily). Videos get a poster frame.
+ * the wall decodes/loads them lazily). Videos get a poster frame; audio gets a
+ * generated cover-art tile.
  */
 async function fileToItem(file: File, pathHint?: string): Promise<MediaItem> {
   const fullUrl = track(URL.createObjectURL(file));
@@ -124,6 +163,19 @@ async function fileToItem(file: File, pathHint?: string): Promise<MediaItem> {
       title,
       path,
       date,
+    };
+  }
+  if (isAudio(file.name)) {
+    const art = await makeAudioThumb(title);
+    return {
+      id: `local-${localId++}`,
+      type: "audio",
+      thumb: art ?? "",
+      full: fullUrl,
+      title,
+      path,
+      date,
+      aspect: 512 / 384,
     };
   }
   return {

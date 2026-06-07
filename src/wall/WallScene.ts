@@ -630,7 +630,8 @@ export class WallScene {
   /** Swap in a higher-resolution image when a tile is focused. */
   private loadFull(tile: Tile): void {
     const item = this.items[tile.index];
-    if (!item || tile.fullLoaded || item.type === "video" || !item.full) return;
+    if (!item || tile.fullLoaded || item.type === "video" || item.type === "audio" || !item.full)
+      return;
     const isLocal = item.full.startsWith("blob:") || item.full.startsWith("data:");
     if (!isLocal && item.full === item.thumb) return; // remote: nothing crisper to load
     tile.fullLoaded = true;

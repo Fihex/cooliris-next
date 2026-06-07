@@ -2,8 +2,8 @@
 export interface MediaItem {
   /** Stable unique id (guid). */
   id: string;
-  /** "image" or "video". */
-  type: "image" | "video";
+  /** "image", "video", or "audio". */
+  type: "image" | "video" | "audio";
   /** True for animated images (GIF) — played as an <img> when opened. */
   animated?: boolean;
   /** Thumbnail URL used for the wall tile. */
@@ -29,3 +29,6 @@ export interface Feed {
   title?: string;
   items: MediaItem[];
 }
+
+/** Progress reporter passed to feed loaders: (done, total). */
+export type ProgressFn = (done: number, total: number) => void;

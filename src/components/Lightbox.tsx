@@ -110,6 +110,7 @@ export function Lightbox({ item, index, total, closing, onClose, onPrev, onNext 
   };
 
   const isVideo = item.type === "video";
+  const isAudio = item.type === "audio";
 
   return (
     <div
@@ -144,6 +145,28 @@ export function Lightbox({ item, index, total, closing, onClose, onPrev, onNext 
             draggable={false}
             className="pointer-events-auto max-h-[90vh] max-w-[94vw] rounded-lg object-contain shadow-2xl"
           />
+        ) : isAudio ? (
+          <div
+            data-media
+            key={item.id}
+            className="pointer-events-auto flex flex-col items-center gap-5 rounded-lg bg-white/5 p-6 shadow-2xl"
+          >
+            {item.thumb ? (
+              <img
+                src={item.thumb}
+                alt={item.title ?? ""}
+                draggable={false}
+                className="max-h-[70vh] max-w-[80vw] select-none rounded-md object-contain"
+                style={{ WebkitUserDrag: "none" } as React.CSSProperties}
+              />
+            ) : null}
+            {item.title ? (
+              <div className="max-w-[80vw] truncate text-center text-sm text-white/80">
+                {item.title}
+              </div>
+            ) : null}
+            <audio src={item.full} controls autoPlay className="w-[min(80vw,520px)]" />
+          </div>
         ) : (
           <img
             data-media

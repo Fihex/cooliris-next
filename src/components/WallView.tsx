@@ -6,16 +6,7 @@ import {
   loadJsonFeedFromFile,
   loadJsonFeedFromText,
 } from "@/feed/jsonFeed";
-import {
-  currentLocalUrls,
-  feedFromDataTransfer,
-  feedFromDirectoryPicker,
-  feedFromFilePicker,
-  feedFromFiles,
-  revokeLocalUrls,
-  revokeUrls,
-  supportsFsAccess,
-} from "@/feed/localFiles";
+import { platform } from "@/platform";
 import { embed, type WallController } from "@/embed/cooliris-embed";
 import { Toolbar, type LoadProgress } from "./Toolbar";
 import { OpenDialog } from "./OpenDialog";
@@ -107,9 +98,9 @@ export function WallView() {
       const token = ++feedToken.current; // supersede any in-flight open
       setBusy(true);
       setLoadStage(null);
-      // Snapshot the previous feed's object URLs; revoke them only AFTER the new
-      // feed (with its own freshly-created URLs) has loaded successfully.
-      const oldUrls = currentLocalUrls();
+      // Snapshot the previous feed's resources; release them only AFTER the new
+      // feed (with its own freshly-created resources) has loaded successfully.
+      const oldResources = platform.snapshotResources();
       const onProgress = (done: number, total: number) => {
         if (token === feedToken.current) setLoadStage({ done, total });
       };
@@ -117,7 +108,7 @@ export function WallView() {
         const feed = await task(onProgress);
         if (token !== feedToken.current) return; // a newer open started — drop this one
         applyFeed(feed);
-        revokeUrls(oldUrls);
+        platform.releaseResources(oldResources);
         toast(`Loaded ${feed.items.length} item(s)`);
       } catch (err) {
         if ((err as DOMException)?.name === "AbortError") return; // picker cancelled
@@ -186,7 +177,7 @@ export function WallView() {
       embed._detach();
       scene.dispose();
       sceneRef.current = null;
-      revokeLocalUrls();
+      platform.releaseAll();
     };
   }, [runFeedTask]);
 
@@ -408,23 +399,23 @@ export function WallView() {
 
       {openOpen && (
         <OpenDialog
-          fsAccess={supportsFsAccess()}
+          fsAccess={platform.supportsFolderPicker}
           onClose={() => setOpenOpen(false)}
           onFiles={(files) => {
             setOpenOpen(false);
-            runFeedTask((p) => feedFromFiles(files, p));
+            runFeedTask((p) => platform.fromFileList(files, p));
           }}
           onFilePicker={() => {
             setOpenOpen(false);
-            runFeedTask((p) => feedFromFilePicker(p));
+            runFeedTask((p) => platform.pickFiles(p));
           }}
           onFolderPicker={() => {
             setOpenOpen(false);
-            runFeedTask((p) => feedFromDirectoryPicker(p));
+            runFeedTask((p) => platform.pickFolder(p));
           }}
           onDrop={(dt) => {
             setOpenOpen(false);
-            runFeedTask((p) => feedFromDataTransfer(dt, p));
+            runFeedTask((p) => platform.fromDataTransfer(dt, p));
           }}
           onJson={() => {
             setOpenOpen(false);

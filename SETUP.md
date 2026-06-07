@@ -46,6 +46,37 @@ Deploy by serving the static `dist/` folder on any static host.
 
 ---
 
+## 4b. Desktop app (Electron)
+
+The same UI also runs as a native desktop app via Electron — bundled Chromium for
+consistent, hardware-accelerated WebGL, plus **real folder access** (absolute
+paths, file dates, no upload prompt) through native OS dialogs.
+
+```bash
+npm run electron:dev       # Vite dev server + Electron window, hot-reload
+npm run electron:preview   # build, then run the production bundle in Electron
+npm run electron:build     # build + package a distributable (AppImage/nsis/dmg) into release/
+```
+
+How it fits together (kept isolated so it's easy to reason about / remove):
+
+- `electron/main.ts` — main process: GPU window, native file/folder dialogs
+  (Node `fs` scan → paths + dates), and a `coolmedia://` protocol that **streams**
+  local files to the renderer (no loading thousands of images into memory).
+- `electron/preload.ts` — `contextBridge` exposing a tiny `window.electron` API.
+- `src/platform/electron.ts` — implements the shared `Platform` interface; the
+  React/Three.js UI is unchanged and auto-selects this when `window.electron` exists
+  (see `src/platform/index.ts`).
+- Electron is opt-in: the `electron:*` scripts set `ELECTRON=1`, which enables
+  `vite-plugin-electron` in `vite.config.ts`. Plain `npm run dev`/`build` stay
+  pure-web and untouched.
+
+> Note: the main/preload bundles are emitted as CommonJS (`dist-electron/*.cjs`)
+> so `require("electron")` resolves to Electron's built-in API even though the
+> project is `"type": "module"`.
+
+---
+
 ## 5. Using it
 
 ### Loading media
@@ -150,8 +181,11 @@ src/
   wall/decodeWorker.ts     Off-main-thread image decode + downscale
   gifsAnimation/           Self-contained wall GIF animation (easy to remove)
   feed/                    jsonFeed.ts, localFiles.ts, types.ts  (loading + normalization)
+  platform/                File-access abstraction: Platform.ts (interface) + web.ts + electron.ts + index.ts (selector)
   components/              WallView, Toolbar, OpenDialog, JsonDialog, SettingsDialog, Lightbox, Scrubber, Toast, ErrorBoundary
   embed/cooliris-embed.ts  window.cooliris.embed.* compatibility shim
   routes/                  TanStack Router (SPA, no SSR)
+electron/                  Desktop target: main.ts, preload.ts, tsconfig.json  (opt-in via ELECTRON=1)
+electron-builder.yml       Packaging config (AppImage / nsis / dmg → release/)
 public/                    sample-feed.json, sample-100.json, samples/*.svg
 ```

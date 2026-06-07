@@ -1,3 +1,4 @@
+import { platform } from "@/platform";
 import type { Feed, JsonFeed, MediaItem } from "./types";
 
 let autoId = 0;
@@ -34,12 +35,16 @@ function normalizeItem(raw: unknown): MediaItem | null {
 
   const rawType = (r.type as string)?.toLowerCase();
   const looksVideo =
-    rawType === "video" || /\.(mp4|webm|ogv|mov|m4v)(\?|$)/i.test(full ?? "");
+    rawType === "video" || /\.(mp4|webm|ogv|mov|m4v|mkv|avi)(\?|$)/i.test(full ?? "");
+  const looksAudio =
+    !looksVideo &&
+    (rawType === "audio" || /\.(mp3|wav|ogg|oga|flac|m4a|aac|opus|weba)(\?|$)/i.test(full ?? ""));
+  const type = looksVideo ? "video" : looksAudio ? "audio" : "image";
 
   return {
     id: (r.id as string) ?? (r.guid as string) ?? nextId(),
-    type: looksVideo ? "video" : "image",
-    animated: !looksVideo && /\.gif(\?|$)/i.test(full ?? "") ? true : undefined,
+    type,
+    animated: type === "image" && /\.gif(\?|$)/i.test(full ?? "") ? true : undefined,
     thumb: thumb ?? full,
     full: full ?? thumb,
     title: (r.title as string) ?? (r.name as string),
@@ -73,10 +78,21 @@ async function fetchJson(url: string): Promise<JsonFeed> {
  */
 export async function loadJsonFeedFromUrl(url: string): Promise<Feed> {
   let data: JsonFeed;
+
+  // Desktop (Electron): fetch through the main process — no CORS, no third party.
+  if (platform.fetchRemoteText && /^https?:\/\//i.test(url)) {
+    const text = await platform.fetchRemoteText(url);
+    data = JSON.parse(text) as JsonFeed;
+    const feed = parseJsonFeed(data);
+    if (feed.items.length === 0) throw new Error("Feed contained no media items.");
+    return feed;
+  }
+
   try {
     data = await fetchJson(url);
   } catch (direct) {
     if (/^https?:\/\//i.test(url)) {
+      // Browser only: a public CORS proxy as a last resort for cross-site feeds.
       try {
         data = await fetchJson(`https://corsproxy.io/?url=${encodeURIComponent(url)}`);
       } catch {
