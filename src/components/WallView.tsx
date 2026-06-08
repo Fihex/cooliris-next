@@ -27,7 +27,7 @@ export function WallView() {
   const fromRef = useRef(""); // yyyy-mm-dd
   const toRef = useRef("");
   const dateFieldRef = useRef<"modified" | "created">("modified");
-  const sortRef = useRef<SortKey>("name-asc");
+  const sortRef = useRef<SortKey>("default");
   const feedToken = useRef(0); // only the most recent open() applies its result
 
   const [items, setItems] = useState<MediaItem[]>([]);
@@ -48,7 +48,7 @@ export function WallView() {
   const [toDate, setToDate] = useState("");
   const [dateField, setDateField] = useState<"modified" | "created">("modified");
   const [hasCreated, setHasCreated] = useState(false); // created dates available (Electron)
-  const [sort, setSort] = useState<SortKey>("name-asc");
+  const [sort, setSort] = useState<SortKey>("default");
   const [progress, setProgress] = useState<LoadProgress>({ loaded: 0, total: 0, pending: 0 });
   const [hover, setHover] = useState<MediaItem | null>(null);
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
@@ -524,6 +524,7 @@ function sortItems(items: MediaItem[], key: SortKey): MediaItem[] {
   const mod = (i: MediaItem) => i.date ?? 0;
   const cre = (i: MediaItem) => i.created ?? i.date ?? 0;
   switch (key) {
+    case "default": break; // keep the feed's natural (as-loaded) order
     case "name-asc": arr.sort((a, b) => collator.compare(name(a), name(b))); break;
     case "name-desc": arr.sort((a, b) => collator.compare(name(b), name(a))); break;
     case "modified-desc": arr.sort((a, b) => mod(b) - mod(a)); break;

@@ -7,6 +7,7 @@ export interface LoadProgress {
 }
 
 export type SortKey =
+  | "default"
   | "name-asc"
   | "name-desc"
   | "modified-desc"
@@ -15,6 +16,7 @@ export type SortKey =
   | "created-asc";
 
 const SORT_OPTIONS: { key: SortKey; label: string }[] = [
+  { key: "default", label: "Default (as loaded)" },
   { key: "name-asc", label: "Name (A → Z)" },
   { key: "name-desc", label: "Name (Z → A)" },
   { key: "modified-desc", label: "Modified (newest)" },
