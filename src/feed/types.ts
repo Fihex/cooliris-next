@@ -16,6 +16,8 @@ export interface MediaItem {
   path?: string;
   /** Timestamp (epoch ms) — file modified time, or a feed-provided date. */
   date?: number;
+  /** Creation timestamp (epoch ms). Electron only (Node birthtime); not in browsers. */
+  created?: number;
   /** Optional click-through link. */
   link?: string;
   /** Native aspect ratio (width / height), if known. Defaults to 1.5. */

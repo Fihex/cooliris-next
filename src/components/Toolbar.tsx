@@ -15,10 +15,13 @@ interface ToolbarProps {
   search: string;
   fromDate: string;
   toDate: string;
+  dateField: "modified" | "created";
+  hasCreated: boolean;
   onOpen: () => void;
   onSearch: (q: string) => void;
   onFromDate: (d: string) => void;
   onToDate: (d: string) => void;
+  onDateField: (f: "modified" | "created") => void;
   onToggleSlideshow: () => void;
   onOpenSettings: () => void;
   onFullscreen: () => void;
@@ -48,8 +51,11 @@ export function Toolbar(props: ToolbarProps) {
         <DatesMenu
           from={props.fromDate}
           to={props.toDate}
+          dateField={props.dateField}
+          hasCreated={props.hasCreated}
           onFrom={props.onFromDate}
           onTo={props.onToDate}
+          onDateField={props.onDateField}
         />
 
         {/* Search */}
@@ -125,17 +131,23 @@ function DateField({ value, onChange }: { value: string; onChange: (v: string) =
   );
 }
 
-/** Date-range filter popover (filters by file last-modified date). */
+/** Date-range filter popover (filters by file modified or — on desktop — created date). */
 function DatesMenu({
   from,
   to,
+  dateField,
+  hasCreated,
   onFrom,
   onTo,
+  onDateField,
 }: {
   from: string;
   to: string;
+  dateField: "modified" | "created";
+  hasCreated: boolean;
   onFrom: (d: string) => void;
   onTo: (d: string) => void;
+  onDateField: (f: "modified" | "created") => void;
 }) {
   const [open, setOpen] = useState(false);
   const active = !!(from || to);
@@ -148,6 +160,24 @@ function DatesMenu({
         <>
           <div className="fixed inset-0 z-30" onClick={() => setOpen(false)} />
           <div className="absolute right-0 top-full z-40 mt-1 w-56 rounded-xl bg-neutral-900 p-3 text-sm shadow-2xl ring-1 ring-white/10">
+            {hasCreated && (
+              <div className="mb-3">
+                <label className="mb-1 block text-xs text-white/50">Filter by</label>
+                <div className="flex overflow-hidden rounded-lg ring-1 ring-white/15">
+                  {(["modified", "created"] as const).map((f) => (
+                    <button
+                      key={f}
+                      onClick={() => onDateField(f)}
+                      className={`flex-1 px-2 py-1 text-xs font-medium capitalize transition ${
+                        dateField === f ? "bg-white text-black" : "text-white/70 hover:bg-white/10"
+                      }`}
+                    >
+                      {f}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
             <label className="mb-1 block text-xs text-white/50">From</label>
             <div className="mb-3">
               <DateField value={from} onChange={onFrom} />
@@ -173,7 +203,9 @@ function DatesMenu({
               </button>
             </div>
             <p className="mt-2 text-[10px] leading-tight text-white/35">
-              Filters by file last-modified date (browsers don't expose created date).
+              {hasCreated
+                ? `Filtering by file ${dateField} date.`
+                : "Filters by file last-modified date (browsers don't expose created date)."}
             </p>
           </div>
         </>

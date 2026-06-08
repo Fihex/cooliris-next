@@ -6,6 +6,8 @@ interface LightboxProps {
   item: MediaItem;
   index: number;
   total: number;
+  /** Which timestamp the info panel shows (matches the toolbar's date filter). */
+  dateField?: "modified" | "created";
   closing?: boolean; // fading out (driven by the parent)
   onClose: () => void;
   onPrev: () => void;
@@ -21,7 +23,16 @@ const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v
  * Wheel/pinch zoom, drag/2-finger pan. Clicking the media or controls never
  * closes — only an empty-area tap, Back, or Esc do. Media can't be selected/dragged.
  */
-export function Lightbox({ item, index, total, closing, onClose, onPrev, onNext }: LightboxProps) {
+export function Lightbox({
+  item,
+  index,
+  total,
+  dateField = "modified",
+  closing,
+  onClose,
+  onPrev,
+  onNext,
+}: LightboxProps) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const stageRef = useRef<HTMLDivElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -245,6 +256,12 @@ export function Lightbox({ item, index, total, closing, onClose, onPrev, onNext 
   const isVideo = item.type === "video";
   const isAudio = item.type === "audio";
 
+  // Info-panel date: follow the chosen field, labeled when a created date exists.
+  const labeledDate = item.created != null; // Electron item (has both dates)
+  const showCreated = dateField === "created" && item.created != null;
+  const dateTs = showCreated ? item.created : item.date;
+  const dateLabel = labeledDate ? (showCreated ? "Created" : "Modified") : "";
+
   return (
     <div
       ref={wrapRef}
@@ -389,7 +406,9 @@ export function Lightbox({ item, index, total, closing, onClose, onPrev, onNext 
           )}
           <div className="text-xs text-white/40">
             {index + 1} / {total}
-            {item.date ? ` · ${new Date(item.date).toLocaleDateString()}` : ""}
+            {dateTs != null
+              ? ` · ${dateLabel ? `${dateLabel} ` : ""}${new Date(dateTs).toLocaleDateString()}`
+              : ""}
           </div>
         </div>
       </div>

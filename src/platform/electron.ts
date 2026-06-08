@@ -24,6 +24,7 @@ interface ScanFile {
   rel: string;
   name: string;
   mtime: number;
+  btime: number;
   subs?: SubFile[];
 }
 interface ScanResult {
@@ -66,6 +67,7 @@ async function feedFromScan(res: ScanResult, onProgress?: ProgressFn): Promise<F
       const url = mediaUrl(f.abs);
       const title = f.name.replace(/\.[^.]+$/, "");
       const date = f.mtime || undefined;
+      const created = f.btime || undefined;
       if (isVideo(f.name)) {
         const poster = await makeVideoThumb(url);
         return {
@@ -76,6 +78,7 @@ async function feedFromScan(res: ScanResult, onProgress?: ProgressFn): Promise<F
           title,
           path: f.rel,
           date,
+          created,
           subs: f.subs?.map((s) => ({
             url: mediaUrl(s.abs),
             label: s.label,
@@ -94,6 +97,7 @@ async function feedFromScan(res: ScanResult, onProgress?: ProgressFn): Promise<F
           title,
           path: f.rel,
           date,
+          created,
           aspect: 512 / 384,
         };
       }
@@ -106,6 +110,7 @@ async function feedFromScan(res: ScanResult, onProgress?: ProgressFn): Promise<F
         title,
         path: f.rel,
         date,
+        created,
       };
     },
     onProgress

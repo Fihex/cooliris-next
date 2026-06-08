@@ -26,6 +26,7 @@ export function WallView() {
   const searchRef = useRef("");
   const fromRef = useRef(""); // yyyy-mm-dd
   const toRef = useRef("");
+  const dateFieldRef = useRef<"modified" | "created">("modified");
   const feedToken = useRef(0); // only the most recent open() applies its result
 
   const [items, setItems] = useState<MediaItem[]>([]);
@@ -44,6 +45,8 @@ export function WallView() {
   const [search, setSearch] = useState("");
   const [fromDate, setFromDate] = useState("");
   const [toDate, setToDate] = useState("");
+  const [dateField, setDateField] = useState<"modified" | "created">("modified");
+  const [hasCreated, setHasCreated] = useState(false); // created dates available (Electron)
   const [progress, setProgress] = useState<LoadProgress>({ loaded: 0, total: 0, pending: 0 });
   const [hover, setHover] = useState<MediaItem | null>(null);
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
@@ -61,12 +64,14 @@ export function WallView() {
     const fromMs = parseDayInput(fromRef.current, false);
     const toMs = parseDayInput(toRef.current, true);
     const hasDate = fromMs !== null || toMs !== null;
+    const useCreated = dateFieldRef.current === "created";
     const filtered = masterRef.current.filter((it) => {
       if (query && !(it.title ?? "").toLowerCase().includes(query)) return false;
       if (hasDate) {
-        if (it.date == null) return false;
-        if (fromMs !== null && it.date < fromMs) return false;
-        if (toMs !== null && it.date > toMs) return false;
+        const ts = useCreated ? it.created : it.date;
+        if (ts == null) return false;
+        if (fromMs !== null && ts < fromMs) return false;
+        if (toMs !== null && ts > toMs) return false;
       }
       return true;
     });
@@ -87,6 +92,13 @@ export function WallView() {
       setSearch("");
       setFromDate("");
       setToDate("");
+      // Created date is only available from the Electron scan (Node birthtime).
+      const created = feed.items.some((it) => it.created != null);
+      setHasCreated(created);
+      if (!created) {
+        dateFieldRef.current = "modified";
+        setDateField("modified");
+      }
       applyFilters();
       embed.callbacks.feedload?.(feed.items.length);
     },
@@ -294,6 +306,8 @@ export function WallView() {
           search={search}
           fromDate={fromDate}
           toDate={toDate}
+          dateField={dateField}
+          hasCreated={hasCreated}
           onOpen={() => setOpenOpen(true)}
           onSearch={(q) => {
             setSearch(q);
@@ -308,6 +322,11 @@ export function WallView() {
           onToDate={(d) => {
             setToDate(d);
             toRef.current = d;
+            applyFilters();
+          }}
+          onDateField={(f) => {
+            setDateField(f);
+            dateFieldRef.current = f;
             applyFilters();
           }}
           onToggleSlideshow={toggleSlideshow}
@@ -390,6 +409,7 @@ export function WallView() {
           item={(selectedItem ?? closingItem)!}
           index={selected >= 0 ? selected : 0}
           total={items.length}
+          dateField={dateField}
           closing={!selectedItem}
           onClose={closeViewer}
           onPrev={() => sceneRef.current?.prev()}

@@ -56,6 +56,7 @@ interface ScanFile {
   rel: string;
   name: string;
   mtime: number;
+  btime: number; // birthtime (created), falls back to mtime when unavailable
   subs?: SubFile[];
 }
 
@@ -73,11 +74,13 @@ function siblingSubs(videoName: string, dir: string, names: string[]): SubFile[]
   return subs;
 }
 
-async function statMtime(abs: string): Promise<number> {
+async function statTimes(abs: string): Promise<{ mtime: number; btime: number }> {
   try {
-    return (await fs.stat(abs)).mtimeMs;
+    const s = await fs.stat(abs);
+    // birthtimeMs can be 0 on filesystems that don't record it → fall back to mtime.
+    return { mtime: s.mtimeMs, btime: s.birthtimeMs || s.mtimeMs };
   } catch {
-    return 0;
+    return { mtime: 0, btime: 0 };
   }
 }
 
@@ -99,11 +102,13 @@ async function scanDir(root: string): Promise<ScanFile[]> {
         await walk(abs, rel);
       } else if (e.isFile() && isMedia(e.name)) {
         const subs = VIDEO_RE.test(e.name) ? siblingSubs(e.name, dir, names) : [];
+        const { mtime, btime } = await statTimes(abs);
         out.push({
           abs,
           rel,
           name: e.name,
-          mtime: await statMtime(abs),
+          mtime,
+          btime,
           subs: subs.length ? subs : undefined,
         });
       }
@@ -151,7 +156,8 @@ ipcMain.handle("pick-files", async () => {
           /* ignore */
         }
       }
-      return { abs, rel: name, name, mtime: await statMtime(abs), subs };
+      const { mtime, btime } = await statTimes(abs);
+      return { abs, rel: name, name, mtime, btime, subs };
     })
   );
   return { rootName: `${files.length} file(s)`, files };
