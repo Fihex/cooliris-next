@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, net, protocol } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, Menu, net, protocol } from "electron";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { promises as fs } from "node:fs";
 import path from "node:path";
@@ -25,6 +25,7 @@ protocol.registerSchemesAsPrivileged([
       supportFetchAPI: true,
       stream: true,
       bypassCSP: true,
+      corsEnabled: true,
     },
   },
   // Serve the bundled renderer from a real origin (app://bundle/) so the SPA
@@ -147,6 +148,24 @@ function createWindow() {
     win.webContents.openDevTools({ mode: "detach" });
   } else {
     win.loadURL("app://bundle/");
+    // No menu in production → removes the default Reload/DevTools accelerators.
+    Menu.setApplicationMenu(null);
+    // Belt-and-suspenders: also swallow Chromium's built-in reload keys. A reload
+    // tears down the WebGL wall and the in-memory feed → black screen, so block it.
+    win.webContents.on("before-input-event", (event, input) => {
+      if (input.type !== "keyDown") return;
+      const key = input.key.toLowerCase();
+      const reload = (input.control || input.meta) && key === "r";
+      if (reload || key === "f5") {
+        event.preventDefault();
+        return;
+      }
+      // F12 still toggles DevTools (the default menu accelerator is gone).
+      if (key === "f12") {
+        event.preventDefault();
+        win?.webContents.toggleDevTools();
+      }
+    });
   }
 
   win.on("closed", () => {
@@ -155,10 +174,21 @@ function createWindow() {
 }
 
 app.whenReady().then(() => {
-  protocol.handle("coolmedia", (request) => {
+  protocol.handle("coolmedia", async (request) => {
     const url = new URL(request.url);
     const abs = decodeURIComponent(url.pathname.replace(/^\//, ""));
-    return net.fetch(pathToFileURL(abs).toString());
+    const res = await net.fetch(pathToFileURL(abs).toString());
+    // The renderer lives on a different origin (app://bundle), and it consumes
+    // these files as WebGL textures (THREE.TextureLoader uses crossOrigin="anonymous")
+    // and draws videos to a <canvas> for posters. Without CORS the image loads are
+    // rejected and the canvas is tainted → no previews. Allow it explicitly.
+    const headers = new Headers(res.headers);
+    headers.set("Access-Control-Allow-Origin", "*");
+    return new Response(res.body, {
+      status: res.status,
+      statusText: res.statusText,
+      headers,
+    });
   });
 
   // Serve the renderer bundle from dist/, with SPA fallback to index.html.

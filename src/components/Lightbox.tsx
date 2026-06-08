@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { MediaItem } from "@/feed/types";
+import { VideoPlayer } from "./VideoPlayer";
 
 interface LightboxProps {
   item: MediaItem;
@@ -22,12 +23,14 @@ const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v
  */
 export function Lightbox({ item, index, total, closing, onClose, onPrev, onNext }: LightboxProps) {
   const wrapRef = useRef<HTMLDivElement>(null);
+  const stageRef = useRef<HTMLDivElement>(null);
   const [t, setT] = useState({ s: 1, x: 0, y: 0 });
   const tRef = useRef(t);
   tRef.current = t;
 
   const [shown, setShown] = useState(false); // for fade-in
   const [smooth, setSmooth] = useState(false); // transition on for wheel, off for drag/pinch
+  const [showInfo, setShowInfo] = useState(true); // info panel (title/path/date) toggle
   const pointers = useRef(new Map<number, { x: number; y: number }>());
   const pinchDist = useRef(0);
   const moved = useRef(false);
@@ -56,7 +59,7 @@ export function Lightbox({ item, index, total, closing, onClose, onPrev, onNext 
     setT((p) => {
       const s2 = clamp(p.s * factor, MIN_SCALE, MAX_SCALE);
       if (s2 === 1) return { s: 1, x: 0, y: 0 };
-      const r = wrapRef.current!.getBoundingClientRect();
+      const r = stageRef.current!.getBoundingClientRect();
       const px = clientX - (r.left + r.width / 2);
       const py = clientY - (r.top + r.height / 2);
       return { s: s2, x: px - (px - p.x) * (s2 / p.s), y: py - (py - p.y) * (s2 / p.s) };
@@ -70,10 +73,28 @@ export function Lightbox({ item, index, total, closing, onClose, onPrev, onNext 
   };
 
   const onPointerDown = (e: React.PointerEvent) => {
-    pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
     moved.current = false;
-    // An empty-area press (not on the media or a control) can become a close-tap.
-    downOnEmpty.current = !(e.target as HTMLElement).closest("[data-media],[data-control]");
+    const isMouse = e.pointerType === "mouse";
+    // A left-click / touch on empty space can become a close-tap.
+    const onEmpty = !(e.target as HTMLElement).closest("[data-media],[data-control]");
+    downOnEmpty.current = onEmpty && (!isMouse || e.button === 0);
+
+    // Pan/pinch is driven by the MIDDLE or RIGHT mouse button (left stays free for
+    // taps and the native media controls), or by touch/pen.
+    const canPan = !isMouse || e.button === 1 || e.button === 2;
+    if (!canPan) return;
+    e.preventDefault(); // suppress middle-click autoscroll / right-click quirks
+
+    pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    // Capture mouse pointers so the release is always delivered here — otherwise a
+    // button let go off-window leaves a stale pointer that "pans" on plain moves.
+    if (isMouse) {
+      try {
+        (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+      } catch {
+        /* pointer already gone */
+      }
+    }
     if (pointers.current.size === 2) {
       const [a, b] = [...pointers.current.values()];
       pinchDist.current = Math.hypot(a.x - b.x, a.y - b.y);
@@ -81,6 +102,13 @@ export function Lightbox({ item, index, total, closing, onClose, onPrev, onNext 
   };
 
   const onPointerMove = (e: React.PointerEvent) => {
+    // Safety net: a mouse move with no button held means a pointerup was missed —
+    // drop stale pointers so the image never pans while nothing is pressed.
+    if (e.pointerType === "mouse" && e.buttons === 0 && pointers.current.size > 0) {
+      pointers.current.clear();
+      pinchDist.current = 0;
+      return;
+    }
     const prev = pointers.current.get(e.pointerId);
     if (!prev) return;
     pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
@@ -109,6 +137,14 @@ export function Lightbox({ item, index, total, closing, onClose, onPrev, onNext 
     if (!moved.current && downOnEmpty.current) onClose(); // tap empty area = close
   };
 
+  // Fullscreen the whole lightbox (so our custom control bar stays visible too).
+  const toggleFullscreen = useCallback(() => {
+    const el = wrapRef.current;
+    if (!el) return;
+    if (document.fullscreenElement) document.exitFullscreen();
+    else el.requestFullscreen?.();
+  }, []);
+
   const isVideo = item.type === "video";
   const isAudio = item.type === "audio";
 
@@ -125,61 +161,65 @@ export function Lightbox({ item, index, total, closing, onClose, onPrev, onNext 
       onPointerCancel={onPointerUp}
       onContextMenu={(e) => e.preventDefault()}
     >
-      {/* Full-size transform layer → origin is the FIXED viewport center, so
-          zoom-to-cursor is stable (no drift/glitch). */}
-      <div
-        className="pointer-events-none absolute inset-0 flex items-center justify-center will-change-transform"
-        style={{
-          transform: `translate(${t.x}px, ${t.y}px) scale(${t.s})`,
-          transformOrigin: "center center",
-          transition: smooth ? "transform 140ms ease-out" : "none",
-        }}
-      >
-        {isVideo ? (
-          <video
-            data-media
-            key={item.id}
-            src={item.full}
-            controls
-            autoPlay
-            draggable={false}
-            className="pointer-events-auto max-h-[90vh] max-w-[94vw] rounded-lg object-contain shadow-2xl"
-          />
-        ) : isAudio ? (
+      {/* Video gets a dedicated player (frame zooms/pans, controls stay pinned).
+          Images/audio use the shared stage: a reserved bottom band keeps the media
+          centered above the info panel; zoom origin is the stage center. */}
+      {isVideo ? (
+        <VideoPlayer
+          src={item.full}
+          itemId={item.id}
+          t={t}
+          smooth={smooth}
+          stageRef={stageRef}
+          onFullscreen={toggleFullscreen}
+        />
+      ) : (
+        <div ref={stageRef} className="absolute inset-x-0 top-0 bottom-36">
           <div
-            data-media
-            key={item.id}
-            className="pointer-events-auto flex flex-col items-center gap-5 rounded-lg bg-white/5 p-6 shadow-2xl"
+            className="pointer-events-none absolute inset-0 flex items-center justify-center will-change-transform"
+            style={{
+              transform: `translate(${t.x}px, ${t.y}px) scale(${t.s})`,
+              transformOrigin: "center center",
+              transition: smooth ? "transform 140ms ease-out" : "none",
+            }}
           >
-            {item.thumb ? (
+            {isAudio ? (
+              <div
+                data-media
+                key={item.id}
+                className="pointer-events-auto flex flex-col items-center gap-5 rounded-lg bg-white/5 p-6 shadow-2xl"
+              >
+                {item.thumb ? (
+                  <img
+                    src={item.thumb}
+                    alt={item.title ?? ""}
+                    draggable={false}
+                    className="max-h-[58vh] max-w-[80vw] select-none rounded-md object-contain"
+                    style={{ WebkitUserDrag: "none" } as React.CSSProperties}
+                  />
+                ) : null}
+                {item.title ? (
+                  <div className="max-w-[80vw] truncate text-center text-sm text-white/80">
+                    {item.title}
+                  </div>
+                ) : null}
+                <audio src={item.full} controls autoPlay className="w-[min(80vw,520px)]" />
+              </div>
+            ) : (
               <img
-                src={item.thumb}
+                data-media
+                key={item.id}
+                src={item.full}
                 alt={item.title ?? ""}
                 draggable={false}
-                className="max-h-[70vh] max-w-[80vw] select-none rounded-md object-contain"
+                onDragStart={(e) => e.preventDefault()}
+                className="pointer-events-auto max-h-full max-w-[94vw] select-none rounded-lg object-contain shadow-2xl"
                 style={{ WebkitUserDrag: "none" } as React.CSSProperties}
               />
-            ) : null}
-            {item.title ? (
-              <div className="max-w-[80vw] truncate text-center text-sm text-white/80">
-                {item.title}
-              </div>
-            ) : null}
-            <audio src={item.full} controls autoPlay className="w-[min(80vw,520px)]" />
+            )}
           </div>
-        ) : (
-          <img
-            data-media
-            key={item.id}
-            src={item.full}
-            alt={item.title ?? ""}
-            draggable={false}
-            onDragStart={(e) => e.preventDefault()}
-            className="pointer-events-auto max-h-[90vh] max-w-[94vw] select-none rounded-lg object-contain shadow-2xl"
-            style={{ WebkitUserDrag: "none" } as React.CSSProperties}
-          />
-        )}
-      </div>
+        </div>
+      )}
 
       <button
         data-control
@@ -189,14 +229,36 @@ export function Lightbox({ item, index, total, closing, onClose, onPrev, onNext 
         ← Back
       </button>
 
+      {/* Toggle the info panel (title/path/date) on/off. */}
+      <button
+        data-control
+        onClick={() => setShowInfo((v) => !v)}
+        aria-pressed={showInfo}
+        title={showInfo ? "Hide info" : "Show info"}
+        className={`absolute right-4 top-4 z-10 flex h-9 w-9 items-center justify-center rounded-full backdrop-blur transition ${
+          showInfo ? "bg-white/25 text-white" : "bg-white/10 text-white/70 hover:bg-white/20"
+        }`}
+      >
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+          <circle cx="12" cy="12" r="9" />
+          <path d="M12 11v5" strokeLinecap="round" />
+          <circle cx="12" cy="7.5" r="0.6" fill="currentColor" stroke="none" />
+        </svg>
+      </button>
+
       <Arrow side="left" onClick={onPrev} />
       <Arrow side="right" onClick={onNext} />
 
+      {/* Info panel sits in the reserved bottom band → never overlaps the media.
+          For video it rides above the custom control bar. Toggle via the ⓘ button. */}
+      {showInfo && (
       <div
         data-control
-        className="absolute inset-x-0 bottom-3 z-10 flex justify-center px-20"
+        className={`pointer-events-none absolute inset-x-0 z-10 flex justify-center px-20 ${
+          isVideo ? "bottom-[4.5rem]" : "bottom-5"
+        }`}
       >
-        <div className="max-h-32 max-w-[70vw] overflow-y-auto rounded-2xl bg-black/70 px-5 py-2 text-center backdrop-blur ring-1 ring-white/10">
+        <div className="pointer-events-auto max-h-24 max-w-[70vw] overflow-y-auto rounded-2xl bg-black/70 px-5 py-2 text-center backdrop-blur ring-1 ring-white/10">
           <div className="text-sm font-medium text-white [overflow-wrap:anywhere]">
             {item.title || "Untitled"}
           </div>
@@ -216,6 +278,7 @@ export function Lightbox({ item, index, total, closing, onClose, onPrev, onNext 
           </div>
         </div>
       </div>
+      )}
     </div>
   );
 }

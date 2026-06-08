@@ -71,6 +71,9 @@ export async function makeVideoThumb(fullUrl: string): Promise<string | null> {
     const video = document.createElement("video");
     video.muted = true;
     video.preload = "metadata";
+    // Needed so drawing the frame to a canvas doesn't taint it (the file is served
+    // cross-origin from coolmedia://, which now sends Access-Control-Allow-Origin).
+    video.crossOrigin = "anonymous";
     video.src = fullUrl;
     const done = (result: string | null) => {
       video.removeAttribute("src");
