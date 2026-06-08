@@ -171,12 +171,20 @@ export function Lightbox({
     });
   }, []);
 
-  const onWheel = (e: React.WheelEvent) => {
-    if (isFullscreen) return; // no zoom in fullscreen — behave like a normal player
-    e.preventDefault();
-    setSmooth(true); // animate between wheel steps
-    zoomAt(e.deltaY < 0 ? 1.2 : 1 / 1.2, e.clientX, e.clientY);
-  };
+  // Wheel-zoom via a non-passive native listener: React attaches `onWheel` as
+  // passive, so e.preventDefault() there is ignored (and warns). Attach it ourselves.
+  useEffect(() => {
+    const el = wrapRef.current;
+    if (!el) return;
+    const onWheelNative = (e: WheelEvent) => {
+      if (isFullscreen) return; // no zoom in fullscreen — behave like a normal player
+      e.preventDefault();
+      setSmooth(true); // animate between wheel steps
+      zoomAt(e.deltaY < 0 ? 1.2 : 1 / 1.2, e.clientX, e.clientY);
+    };
+    el.addEventListener("wheel", onWheelNative, { passive: false });
+    return () => el.removeEventListener("wheel", onWheelNative);
+  }, [isFullscreen, zoomAt]);
 
   const onPointerDown = (e: React.PointerEvent) => {
     bumpActivity();
@@ -268,7 +276,6 @@ export function Lightbox({
       className={`absolute inset-0 z-40 select-none touch-none overflow-hidden bg-black transition-opacity duration-200 ${
         shown && !closing ? "opacity-100" : "opacity-0"
       } ${closing ? "pointer-events-none" : ""} ${hideChrome ? "cursor-none" : ""}`}
-      onWheel={onWheel}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
@@ -339,6 +346,7 @@ export function Lightbox({
                 src={item.full}
                 alt={item.title ?? ""}
                 draggable={false}
+                decoding="async"
                 onDragStart={(e) => e.preventDefault()}
                 className="pointer-events-auto max-h-full max-w-[94vw] select-none rounded-lg object-contain shadow-2xl"
                 style={{ WebkitUserDrag: "none" } as React.CSSProperties}
