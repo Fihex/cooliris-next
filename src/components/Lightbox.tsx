@@ -18,39 +18,6 @@ const MIN_SCALE = 1;
 const MAX_SCALE = 8;
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
 
-// Cap for the fit-view preview. ≥ a 4K display's height, so the downscale is
-// invisible at fit; the full-res file is swapped in once you zoom past 1×.
-const PREVIEW_MAX_EDGE = 2560;
-
-/**
- * Decode `url` off the main thread and return a downscaled JPEG blob URL. Avoids the
- * main-thread freeze of painting/zooming a huge (e.g. 21 MP) image. Returns the
- * original url when it's already within the cap.
- */
-async function makeDownscaledUrl(url: string, maxEdge: number): Promise<string> {
-  const blob = await (await fetch(url)).blob();
-  const bmp = await createImageBitmap(blob); // decode runs off the main thread
-  const scale = Math.min(1, maxEdge / Math.max(bmp.width, bmp.height));
-  if (scale === 1) {
-    bmp.close?.();
-    return url;
-  }
-  const w = Math.max(1, Math.round(bmp.width * scale));
-  const h = Math.max(1, Math.round(bmp.height * scale));
-  const canvas = document.createElement("canvas");
-  canvas.width = w;
-  canvas.height = h;
-  canvas.getContext("2d")?.drawImage(bmp, 0, 0, w, h);
-  bmp.close?.();
-  return await new Promise<string>((resolve, reject) =>
-    canvas.toBlob(
-      (b) => (b ? resolve(URL.createObjectURL(b)) : reject(new Error("toBlob failed"))),
-      "image/jpeg",
-      0.9
-    )
-  );
-}
-
 /**
  * Full-screen media viewer (opaque, so the wall behind never shows through).
  * Wheel/pinch zoom, drag/2-finger pan. Clicking the media or controls never
@@ -75,9 +42,6 @@ export function Lightbox({
 
   const [shown, setShown] = useState(false); // for fade-in
   const [smooth, setSmooth] = useState(false); // transition on for wheel, off for drag/pinch
-  // Progressive image loading: a downscaled preview for the fit view, full-res once zoomed.
-  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
-  const [fullWanted, setFullWanted] = useState(false);
   // Info-panel toggle persists across items + sessions (off stays off until re-enabled).
   const [showInfo, setShowInfo] = useState(
     () => localStorage.getItem("lightbox.showInfo") !== "0"
@@ -130,38 +94,6 @@ export function Lightbox({
 
   // Reset zoom whenever the shown item changes.
   useEffect(() => setT({ s: 1, x: 0, y: 0 }), [item.id]);
-
-  // Build a downscaled preview for static images (off the main thread). Until it's
-  // ready the viewer shows nothing (the fade-in covers it) rather than freezing on a
-  // huge full-res decode. On failure, fall back to the original.
-  useEffect(() => {
-    setPreviewUrl(null);
-    setFullWanted(false);
-    if (item.type !== "image" || item.animated) return;
-    let cancelled = false;
-    let created: string | null = null;
-    makeDownscaledUrl(item.full, PREVIEW_MAX_EDGE)
-      .then((url) => {
-        if (cancelled) {
-          if (url.startsWith("blob:")) URL.revokeObjectURL(url);
-          return;
-        }
-        created = url.startsWith("blob:") ? url : null;
-        setPreviewUrl(url);
-      })
-      .catch(() => {
-        if (!cancelled) setPreviewUrl(item.full); // fall back to the full image
-      });
-    return () => {
-      cancelled = true;
-      if (created) URL.revokeObjectURL(created);
-    };
-  }, [item.id, item.type, item.animated, item.full]);
-
-  // Once the user zooms past fit, swap in the full-resolution image (and keep it).
-  useEffect(() => {
-    if (t.s > 1) setFullWanted(true);
-  }, [t.s]);
 
   // Track fullscreen; entering/leaving resets zoom so the frame fits cleanly.
   useEffect(() => {
@@ -332,10 +264,6 @@ export function Lightbox({
   const isVideo = item.type === "video";
   const isAudio = item.type === "audio";
 
-  // Progressive source: full-res for GIFs or once zoomed; otherwise the downscaled
-  // preview (undefined until ready → blank during the fade-in, no full-res freeze).
-  const imageSrc = item.animated || fullWanted ? item.full : previewUrl ?? undefined;
-
   // Info-panel date: follow the chosen field, labeled when a created date exists.
   const labeledDate = item.created != null; // Electron item (has both dates)
   const showCreated = dateField === "created" && item.created != null;
@@ -415,7 +343,7 @@ export function Lightbox({
               <img
                 data-media
                 key={item.id}
-                src={imageSrc}
+                src={item.full}
                 alt={item.title ?? ""}
                 draggable={false}
                 decoding="async"
