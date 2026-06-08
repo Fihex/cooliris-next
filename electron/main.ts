@@ -2,7 +2,11 @@ import { app, BrowserWindow, dialog, ipcMain, Menu, net, protocol } from "electr
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import { parseFile } from "music-metadata";
+
+// music-metadata is ESM and loads its format parsers via dynamic import(); we keep it
+// out of the bundle (see vite.config externals) and import it lazily at runtime.
+let mmPromise: Promise<typeof import("music-metadata")> | null = null;
+const loadMusicMetadata = () => (mmPromise ??= import("music-metadata"));
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -191,13 +195,17 @@ ipcMain.handle("pick-files", async () => {
 });
 
 // Read embedded cover art (ID3/FLAC/MP4) from an audio file → data URL, or null.
+async function extractCover(abs: string): Promise<string | null> {
+  const { parseFile } = await loadMusicMetadata();
+  const meta = await parseFile(abs, { duration: false });
+  const pic = meta.common.picture?.[0];
+  if (!pic) return null;
+  return `data:${pic.format || "image/jpeg"};base64,${Buffer.from(pic.data).toString("base64")}`;
+}
+
 ipcMain.handle("get-cover", async (_e, abs: string): Promise<string | null> => {
   try {
-    const meta = await parseFile(abs, { duration: false });
-    const pic = meta.common.picture?.[0];
-    if (!pic) return null;
-    const b64 = Buffer.from(pic.data).toString("base64");
-    return `data:${pic.format || "image/jpeg"};base64,${b64}`;
+    return await extractCover(abs);
   } catch {
     return null;
   }

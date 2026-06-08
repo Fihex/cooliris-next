@@ -33,6 +33,11 @@ export default defineConfig({
                   lib: false,
                   rollupOptions: {
                     input: "electron/main.ts",
+                    // Don't bundle music-metadata: it lazy-loads its format parsers
+                    // via dynamic import(), and the bundler dropped some (e.g. MP4),
+                    // breaking cover extraction. Loaded from node_modules at runtime
+                    // (asarUnpack'd) so every parser is available.
+                    external: [/^music-metadata($|\/)/],
                     output: {
                       format: "cjs",
                       entryFileNames: "[name].cjs",
