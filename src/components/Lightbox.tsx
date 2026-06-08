@@ -24,36 +24,130 @@ const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v
 export function Lightbox({ item, index, total, closing, onClose, onPrev, onNext }: LightboxProps) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const stageRef = useRef<HTMLDivElement>(null);
+  const videoRef = useRef<HTMLVideoElement>(null);
   const [t, setT] = useState({ s: 1, x: 0, y: 0 });
   const tRef = useRef(t);
   tRef.current = t;
 
   const [shown, setShown] = useState(false); // for fade-in
   const [smooth, setSmooth] = useState(false); // transition on for wheel, off for drag/pinch
-  const [showInfo, setShowInfo] = useState(true); // info panel (title/path/date) toggle
+  // Info-panel toggle persists across items + sessions (off stays off until re-enabled).
+  const [showInfo, setShowInfo] = useState(
+    () => localStorage.getItem("lightbox.showInfo") !== "0"
+  );
+  const toggleInfo = () =>
+    setShowInfo((v) => {
+      const next = !v;
+      localStorage.setItem("lightbox.showInfo", next ? "1" : "0");
+      return next;
+    });
+  const [isFullscreen, setIsFullscreen] = useState(false); // gestures off in fullscreen
+  const [idle, setIdle] = useState(false); // pointer inactive → hide chrome
+  const [videoPaused, setVideoPaused] = useState(false);
   const pointers = useRef(new Map<number, { x: number; y: number }>());
   const pinchDist = useRef(0);
   const moved = useRef(false);
   const downOnEmpty = useRef(false);
+  const idleRef = useRef(false);
+  const idleTimer = useRef<number | undefined>(undefined);
+
+  // Auto-hide chrome (controls/info/cursor) when idle: for a *playing* video in any
+  // mode, and for images/audio only in fullscreen. Paused video keeps its controls.
+  const hideChrome =
+    idle && (item.type === "video" ? !videoPaused : isFullscreen);
+
+  // Any pointer activity shows the chrome and restarts the idle countdown.
+  const bumpActivity = () => {
+    if (idleRef.current) {
+      idleRef.current = false;
+      setIdle(false);
+    }
+    window.clearTimeout(idleTimer.current);
+    idleTimer.current = window.setTimeout(() => {
+      idleRef.current = true;
+      setIdle(true);
+    }, 2500);
+  };
 
   useEffect(() => {
     const id = requestAnimationFrame(() => setShown(true));
     return () => cancelAnimationFrame(id);
   }, []);
 
+  // Start the idle countdown on open; clear the timer on close.
+  useEffect(() => {
+    bumpActivity();
+    return () => window.clearTimeout(idleTimer.current);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // Reset zoom whenever the shown item changes.
   useEffect(() => setT({ s: 1, x: 0, y: 0 }), [item.id]);
 
-  // Keyboard: Esc closes, arrows navigate.
+  // Track fullscreen; entering/leaving resets zoom so the frame fits cleanly.
   useEffect(() => {
+    const onFsChange = () => {
+      setIsFullscreen(!!document.fullscreenElement);
+      setT({ s: 1, x: 0, y: 0 });
+    };
+    document.addEventListener("fullscreenchange", onFsChange);
+    return () => document.removeEventListener("fullscreenchange", onFsChange);
+  }, []);
+
+  // Track play/pause so chrome only auto-hides while a video is actually playing.
+  useEffect(() => {
+    if (item.type !== "video") return;
+    const v = videoRef.current;
+    if (!v) return;
+    const sync = () => setVideoPaused(v.paused);
+    sync();
+    v.addEventListener("play", sync);
+    v.addEventListener("pause", sync);
+    return () => {
+      v.removeEventListener("play", sync);
+      v.removeEventListener("pause", sync);
+    };
+  }, [item.id, item.type]);
+
+  // Keyboard: Esc closes; arrows navigate (images/audio) or seek/volume (video).
+  useEffect(() => {
+    const isVideo = item.type === "video";
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-      else if (e.key === "ArrowRight") onNext();
+      if (e.key === "Escape") {
+        // Esc leaves fullscreen first; only closes the lightbox when not fullscreen.
+        if (document.fullscreenElement) document.exitFullscreen();
+        else onClose();
+        return;
+      }
+      // On a video, the arrows drive playback instead of navigating items:
+      // ←/→ seek ∓10s, ↑/↓ change volume.
+      const v = videoRef.current;
+      if (isVideo && v) {
+        if (e.key === "ArrowRight") {
+          e.preventDefault();
+          v.currentTime = Math.min(v.duration || Infinity, v.currentTime + 10);
+          v.dispatchEvent(new CustomEvent("uiskip", { detail: "forward" }));
+        } else if (e.key === "ArrowLeft") {
+          e.preventDefault();
+          v.currentTime = Math.max(0, v.currentTime - 10);
+          v.dispatchEvent(new CustomEvent("uiskip", { detail: "back" }));
+        } else if (e.key === "ArrowUp") {
+          e.preventDefault();
+          v.muted = false;
+          v.volume = clamp(v.volume + 0.1, 0, 1);
+        } else if (e.key === "ArrowDown") {
+          e.preventDefault();
+          v.muted = false;
+          v.volume = clamp(v.volume - 0.1, 0, 1);
+        }
+        return;
+      }
+      if (e.key === "ArrowRight") onNext();
       else if (e.key === "ArrowLeft") onPrev();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [onClose, onPrev, onNext]);
+  }, [onClose, onPrev, onNext, item.type]);
 
   const zoomAt = useCallback((factor: number, clientX: number, clientY: number) => {
     setT((p) => {
@@ -67,12 +161,14 @@ export function Lightbox({ item, index, total, closing, onClose, onPrev, onNext 
   }, []);
 
   const onWheel = (e: React.WheelEvent) => {
+    if (isFullscreen) return; // no zoom in fullscreen — behave like a normal player
     e.preventDefault();
     setSmooth(true); // animate between wheel steps
     zoomAt(e.deltaY < 0 ? 1.2 : 1 / 1.2, e.clientX, e.clientY);
   };
 
   const onPointerDown = (e: React.PointerEvent) => {
+    bumpActivity();
     moved.current = false;
     const isMouse = e.pointerType === "mouse";
     // A left-click / touch on empty space can become a close-tap.
@@ -80,8 +176,8 @@ export function Lightbox({ item, index, total, closing, onClose, onPrev, onNext 
     downOnEmpty.current = onEmpty && (!isMouse || e.button === 0);
 
     // Pan/pinch is driven by the MIDDLE or RIGHT mouse button (left stays free for
-    // taps and the native media controls), or by touch/pen.
-    const canPan = !isMouse || e.button === 1 || e.button === 2;
+    // taps and the native media controls), or by touch/pen. Disabled in fullscreen.
+    const canPan = !isFullscreen && (!isMouse || e.button === 1 || e.button === 2);
     if (!canPan) return;
     e.preventDefault(); // suppress middle-click autoscroll / right-click quirks
 
@@ -102,6 +198,7 @@ export function Lightbox({ item, index, total, closing, onClose, onPrev, onNext 
   };
 
   const onPointerMove = (e: React.PointerEvent) => {
+    bumpActivity();
     // Safety net: a mouse move with no button held means a pointerup was missed —
     // drop stale pointers so the image never pans while nothing is pressed.
     if (e.pointerType === "mouse" && e.buttons === 0 && pointers.current.size > 0) {
@@ -153,7 +250,7 @@ export function Lightbox({ item, index, total, closing, onClose, onPrev, onNext 
       ref={wrapRef}
       className={`absolute inset-0 z-40 select-none touch-none overflow-hidden bg-black transition-opacity duration-200 ${
         shown && !closing ? "opacity-100" : "opacity-0"
-      } ${closing ? "pointer-events-none" : ""}`}
+      } ${closing ? "pointer-events-none" : ""} ${hideChrome ? "cursor-none" : ""}`}
       onWheel={onWheel}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
@@ -171,10 +268,14 @@ export function Lightbox({ item, index, total, closing, onClose, onPrev, onNext 
           t={t}
           smooth={smooth}
           stageRef={stageRef}
+          videoRef={videoRef}
+          subs={item.subs}
+          fullscreen={isFullscreen}
+          chromeHidden={hideChrome}
           onFullscreen={toggleFullscreen}
         />
       ) : (
-        <div ref={stageRef} className="absolute inset-x-0 top-0 bottom-36">
+        <div ref={stageRef} className="absolute inset-0">
           <div
             className="pointer-events-none absolute inset-0 flex items-center justify-center will-change-transform"
             style={{
@@ -203,7 +304,15 @@ export function Lightbox({ item, index, total, closing, onClose, onPrev, onNext 
                     {item.title}
                   </div>
                 ) : null}
-                <audio src={item.full} controls autoPlay className="w-[min(80vw,520px)]" />
+                <audio
+                  key={item.id}
+                  src={item.full}
+                  controls
+                  autoPlay
+                  preload="metadata"
+                  style={{ colorScheme: "dark" }}
+                  className="w-[min(80vw,520px)]"
+                />
               </div>
             ) : (
               <img
@@ -224,7 +333,9 @@ export function Lightbox({ item, index, total, closing, onClose, onPrev, onNext 
       <button
         data-control
         onClick={onClose}
-        className="absolute left-4 top-4 z-10 rounded-full bg-white/10 px-3 py-1.5 text-sm text-white backdrop-blur hover:bg-white/20"
+        className={`absolute left-4 top-4 z-10 rounded-full bg-white/10 px-3 py-1.5 text-sm text-white backdrop-blur transition-opacity duration-300 hover:bg-white/20 ${
+          hideChrome ? "pointer-events-none opacity-0" : "opacity-100"
+        }`}
       >
         ← Back
       </button>
@@ -232,12 +343,12 @@ export function Lightbox({ item, index, total, closing, onClose, onPrev, onNext 
       {/* Toggle the info panel (title/path/date) on/off. */}
       <button
         data-control
-        onClick={() => setShowInfo((v) => !v)}
+        onClick={toggleInfo}
         aria-pressed={showInfo}
         title={showInfo ? "Hide info" : "Show info"}
-        className={`absolute right-4 top-4 z-10 flex h-9 w-9 items-center justify-center rounded-full backdrop-blur transition ${
-          showInfo ? "bg-white/25 text-white" : "bg-white/10 text-white/70 hover:bg-white/20"
-        }`}
+        className={`absolute right-4 top-4 z-10 flex h-9 w-9 items-center justify-center rounded-full backdrop-blur transition-opacity duration-300 ${
+          hideChrome ? "pointer-events-none opacity-0" : "opacity-100"
+        } ${showInfo ? "bg-white/25 text-white" : "bg-white/10 text-white/70 hover:bg-white/20"}`}
       >
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
           <circle cx="12" cy="12" r="9" />
@@ -246,19 +357,23 @@ export function Lightbox({ item, index, total, closing, onClose, onPrev, onNext 
         </svg>
       </button>
 
-      <Arrow side="left" onClick={onPrev} />
-      <Arrow side="right" onClick={onNext} />
+      <Arrow side="left" onClick={onPrev} hidden={hideChrome} />
+      <Arrow side="right" onClick={onNext} hidden={hideChrome} />
 
       {/* Info panel sits in the reserved bottom band → never overlaps the media.
           For video it rides above the custom control bar. Toggle via the ⓘ button. */}
       {showInfo && (
       <div
         data-control
-        className={`pointer-events-none absolute inset-x-0 z-10 flex justify-center px-20 ${
+        className={`pointer-events-none absolute inset-x-0 z-10 flex justify-center px-20 transition-opacity duration-300 ${
           isVideo ? "bottom-[4.5rem]" : "bottom-5"
-        }`}
+        } ${hideChrome ? "opacity-0" : "opacity-100"}`}
       >
-        <div className="pointer-events-auto max-h-24 max-w-[70vw] overflow-y-auto rounded-2xl bg-black/70 px-5 py-2 text-center backdrop-blur ring-1 ring-white/10">
+        <div
+          className={`max-h-24 max-w-[70vw] overflow-y-auto rounded-2xl bg-black/70 px-5 py-2 text-center backdrop-blur ring-1 ring-white/10 ${
+            hideChrome ? "pointer-events-none" : "pointer-events-auto"
+          }`}
+        >
           <div className="text-sm font-medium text-white [overflow-wrap:anywhere]">
             {item.title || "Untitled"}
           </div>
@@ -283,7 +398,15 @@ export function Lightbox({ item, index, total, closing, onClose, onPrev, onNext 
   );
 }
 
-function Arrow({ side, onClick }: { side: "left" | "right"; onClick: () => void }) {
+function Arrow({
+  side,
+  onClick,
+  hidden,
+}: {
+  side: "left" | "right";
+  onClick: () => void;
+  hidden?: boolean;
+}) {
   return (
     <button
       data-control
@@ -291,7 +414,7 @@ function Arrow({ side, onClick }: { side: "left" | "right"; onClick: () => void 
       aria-label={side === "left" ? "Previous" : "Next"}
       className={`absolute top-1/2 z-10 flex h-16 w-16 -translate-y-1/2 items-center justify-center rounded-full bg-black/40 text-4xl text-white/80 backdrop-blur transition hover:bg-black/60 hover:text-white ${
         side === "left" ? "left-4" : "right-4"
-      }`}
+      } ${hidden ? "pointer-events-none opacity-0" : "opacity-100"}`}
     >
       {side === "left" ? "‹" : "›"}
     </button>

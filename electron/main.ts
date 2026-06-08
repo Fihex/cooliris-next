@@ -41,13 +41,35 @@ protocol.registerSchemesAsPrivileged([
 const IMAGE_RE = /\.(jpe?g|png|gif|webp|avif|bmp|svg)$/i;
 const VIDEO_RE = /\.(mp4|webm|ogv|mov|m4v|mkv|avi)$/i;
 const AUDIO_RE = /\.(mp3|wav|ogg|oga|flac|m4a|aac|opus|weba)$/i;
+const SUB_RE = /\.(srt|vtt)$/i;
 const isMedia = (n: string) => IMAGE_RE.test(n) || VIDEO_RE.test(n) || AUDIO_RE.test(n);
+
+interface SubFile {
+  abs: string;
+  label: string;
+  ext: string; // "srt" | "vtt"
+}
 
 interface ScanFile {
   abs: string;
   rel: string;
   name: string;
   mtime: number;
+  subs?: SubFile[];
+}
+
+/** Find sidecar subtitle files (same stem) for a video, given its dir's entries. */
+function siblingSubs(videoName: string, dir: string, names: string[]): SubFile[] {
+  const stem = videoName.replace(/\.[^.]+$/, "");
+  const subs: SubFile[] = [];
+  for (const n of names) {
+    const m = n.match(SUB_RE);
+    if (!m || !n.startsWith(stem) || n === videoName) continue;
+    // The bit between the video stem and the extension becomes the label ("en", …).
+    const label = n.slice(stem.length).replace(SUB_RE, "").replace(/^[.\-_\s]+/, "");
+    subs.push({ abs: path.join(dir, n), label: label || "Subtitles", ext: m[1].toLowerCase() });
+  }
+  return subs;
 }
 
 async function statMtime(abs: string): Promise<number> {
@@ -68,13 +90,21 @@ async function scanDir(root: string): Promise<ScanFile[]> {
     } catch {
       return;
     }
+    const names = entries.map((e) => e.name);
     for (const e of entries) {
       const abs = path.join(dir, e.name);
       const rel = prefix ? `${prefix}/${e.name}` : e.name;
       if (e.isDirectory()) {
         await walk(abs, rel);
       } else if (e.isFile() && isMedia(e.name)) {
-        out.push({ abs, rel, name: e.name, mtime: await statMtime(abs) });
+        const subs = VIDEO_RE.test(e.name) ? siblingSubs(e.name, dir, names) : [];
+        out.push({
+          abs,
+          rel,
+          name: e.name,
+          mtime: await statMtime(abs),
+          subs: subs.length ? subs : undefined,
+        });
       }
     }
   }
@@ -108,12 +138,20 @@ ipcMain.handle("pick-files", async () => {
   });
   if (r.canceled || !r.filePaths.length) return null;
   const files: ScanFile[] = await Promise.all(
-    r.filePaths.map(async (abs) => ({
-      abs,
-      rel: path.basename(abs),
-      name: path.basename(abs),
-      mtime: await statMtime(abs),
-    }))
+    r.filePaths.map(async (abs) => {
+      const name = path.basename(abs);
+      let subs: SubFile[] | undefined;
+      if (VIDEO_RE.test(name)) {
+        try {
+          const dir = path.dirname(abs);
+          const found = siblingSubs(name, dir, await fs.readdir(dir));
+          subs = found.length ? found : undefined;
+        } catch {
+          /* ignore */
+        }
+      }
+      return { abs, rel: name, name, mtime: await statMtime(abs), subs };
+    })
   );
   return { rootName: `${files.length} file(s)`, files };
 });

@@ -20,6 +20,18 @@ export interface MediaItem {
   link?: string;
   /** Native aspect ratio (width / height), if known. Defaults to 1.5. */
   aspect?: number;
+  /** Sidecar subtitle tracks (.vtt / .srt found next to a video file). */
+  subs?: VideoSub[];
+}
+
+/** A sidecar subtitle track for a video. */
+export interface VideoSub {
+  /** URL to fetch the subtitle text (coolmedia:// for local files). */
+  url: string;
+  /** Label shown in the captions chooser (e.g. "en", "Subtitles"). */
+  label: string;
+  /** True if the source is SubRip (.srt) and needs WebVTT conversion. */
+  srt: boolean;
 }
 
 /** The shape of a JSON manifest file/URL. Either a bare array or `{ items: [...] }`. */

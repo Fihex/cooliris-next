@@ -14,11 +14,17 @@ import {
 import type { Platform } from "./Platform";
 
 /* ----- bridge contract (must match electron/preload.ts + main.ts) ----- */
+interface SubFile {
+  abs: string;
+  label: string;
+  ext: string;
+}
 interface ScanFile {
   abs: string;
   rel: string;
   name: string;
   mtime: number;
+  subs?: SubFile[];
 }
 interface ScanResult {
   rootName: string;
@@ -69,6 +75,11 @@ async function feedFromScan(res: ScanResult, onProgress?: ProgressFn): Promise<F
           title,
           path: f.rel,
           date,
+          subs: f.subs?.map((s) => ({
+            url: mediaUrl(s.abs),
+            label: s.label,
+            srt: s.ext === "srt",
+          })),
         };
       }
       if (isAudio(f.name)) {

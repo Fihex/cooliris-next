@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import type { VideoSub } from "@/feed/types";
 
 /**
  * Self-contained video viewer for the Lightbox. All video-specific behaviour
@@ -29,19 +30,132 @@ interface VideoPlayerProps {
   smooth: boolean;
   /** The Lightbox centers media (and computes zoom origin) against this stage. */
   stageRef: React.RefObject<HTMLDivElement>;
+  /** Owned by the Lightbox so its keyboard shortcuts can seek/adjust volume. */
+  videoRef: React.RefObject<HTMLVideoElement>;
+  /** Sidecar subtitle tracks (.vtt / .srt) detected next to the video file. */
+  subs?: VideoSub[];
+  /** Fill the viewport edge-to-edge (fullscreen) vs. contained with a bottom band. */
+  fullscreen: boolean;
+  /** Fade out the control bar when the pointer is idle. */
+  chromeHidden: boolean;
   onFullscreen: () => void;
 }
 
-export function VideoPlayer({ src, itemId, t, smooth, stageRef, onFullscreen }: VideoPlayerProps) {
-  const videoRef = useRef<HTMLVideoElement>(null);
+/** SubRip → WebVTT: add the header and use a dot (not comma) before milliseconds. */
+function srtToVtt(srt: string): string {
+  const body = srt.replace(/\r+/g, "").replace(/(\d{2}:\d{2}:\d{2}),(\d{3})/g, "$1.$2");
+  return `WEBVTT\n\n${body}`;
+}
+
+/** Big glyph for the transient play/pause/skip overlay. */
+function FlashIcon({ kind }: { kind: string }) {
+  const p = { width: 34, height: 34, viewBox: "0 0 24 24", fill: "currentColor" } as const;
+  if (kind === "pause")
+    return (
+      <svg {...p}>
+        <rect x="6" y="5" width="4" height="14" rx="1" />
+        <rect x="14" y="5" width="4" height="14" rx="1" />
+      </svg>
+    );
+  if (kind === "back")
+    return (
+      <svg {...p}>
+        <path d="M11 6L5 12l6 6V6z" />
+        <path d="M19 6l-6 6 6 6V6z" />
+      </svg>
+    );
+  if (kind === "forward")
+    return (
+      <svg {...p}>
+        <path d="M13 6l6 6-6 6V6z" />
+        <path d="M5 6l6 6-6 6V6z" />
+      </svg>
+    );
+  return (
+    <svg {...p}>
+      <path d="M8 5v14l11-7z" />
+    </svg>
+  );
+}
+
+export function VideoPlayer({
+  src,
+  itemId,
+  t,
+  smooth,
+  stageRef,
+  videoRef,
+  subs,
+  fullscreen,
+  chromeHidden,
+  onFullscreen,
+}: VideoPlayerProps) {
+  // Fetch each sidecar subtitle, convert .srt→.vtt, and expose as same-origin blob
+  // URLs for <track> (avoids cross-origin track restrictions).
+  const [trackUrls, setTrackUrls] = useState<{ url: string; label: string }[]>([]);
+  useEffect(() => {
+    let cancelled = false;
+    const created: string[] = [];
+    (async () => {
+      const out: { url: string; label: string }[] = [];
+      for (const s of subs ?? []) {
+        try {
+          const text = await (await fetch(s.url)).text();
+          const blob = new Blob([s.srt ? srtToVtt(text) : text], { type: "text/vtt" });
+          const url = URL.createObjectURL(blob);
+          created.push(url);
+          out.push({ url, label: s.label });
+        } catch {
+          /* skip unreadable subtitle */
+        }
+      }
+      if (!cancelled) setTrackUrls(out);
+    })();
+    return () => {
+      cancelled = true;
+      created.forEach((u) => URL.revokeObjectURL(u));
+      setTrackUrls([]);
+    };
+  }, [subs, itemId]);
+
+  // Brief center overlay on play / pause / skip — covers the button, the click, and
+  // the keyboard shortcuts (which dispatch a "uiskip" event on the video element).
+  const [flash, setFlash] = useState<{ kind: string; id: number } | null>(null);
+  useEffect(() => {
+    const v = videoRef.current;
+    if (!v) return;
+    let n = 0;
+    let first = true; // skip the flash for the initial autoplay
+    const fire = (kind: string) => setFlash({ kind, id: ++n });
+    const onPlay = () => {
+      if (first) {
+        first = false;
+        return;
+      }
+      fire("play");
+    };
+    const onPause = () => fire("pause");
+    const onSkip = (e: Event) => fire((e as CustomEvent).detail === "back" ? "back" : "forward");
+    v.addEventListener("play", onPlay);
+    v.addEventListener("pause", onPause);
+    v.addEventListener("uiskip", onSkip as EventListener);
+    return () => {
+      v.removeEventListener("play", onPlay);
+      v.removeEventListener("pause", onPause);
+      v.removeEventListener("uiskip", onSkip as EventListener);
+    };
+  }, [videoRef, itemId]);
 
   return (
     <>
-      {/* Frame: lives in the (taller) reserved-band stage and follows the shared
-          zoom/pan transform. Origin is the stage center → stable zoom-to-cursor. */}
-      <div ref={stageRef} className="absolute inset-x-0 top-0 bottom-44">
+      {/* Centered in the full viewport (like images); the control bar overlays the
+          bottom. Fullscreen fills edge-to-edge, windowed stays contained — only the
+          size differs. Follows the shared zoom/pan transform; origin = stage center. */}
+      <div ref={stageRef} className="absolute inset-0">
         <div
-          className="pointer-events-none absolute inset-0 flex items-center justify-center will-change-transform"
+          className={`pointer-events-none absolute inset-0 flex items-center justify-center will-change-transform ${
+            fullscreen ? "" : "p-6"
+          }`}
           style={{
             transform: `translate(${t.x}px, ${t.y}px) scale(${t.s})`,
             transformOrigin: "center center",
@@ -59,12 +173,36 @@ export function VideoPlayer({ src, itemId, t, smooth, stageRef, onFullscreen }: 
               const v = videoRef.current;
               if (v) (v.paused ? v.play() : v.pause());
             }}
-            className="pointer-events-auto max-h-full max-w-[94vw] cursor-pointer rounded-lg object-contain shadow-2xl"
-          />
+            className={`pointer-events-auto h-full w-full object-contain ${
+              chromeHidden ? "cursor-none" : "cursor-pointer"
+            }`}
+          >
+            {trackUrls.map((tr) => (
+              <track key={tr.url} kind="subtitles" label={tr.label} src={tr.url} />
+            ))}
+          </video>
         </div>
+
+        {/* Transient play/pause/skip indicator, centered over the frame. */}
+        {flash && (
+          <div
+            key={flash.id}
+            className="ui-flash pointer-events-none absolute inset-0 z-10 flex items-center justify-center"
+          >
+            <div className="flex h-20 w-20 items-center justify-center rounded-full bg-black/55 text-white">
+              <FlashIcon kind={flash.kind} />
+            </div>
+          </div>
+        )}
       </div>
 
-      <VideoControls videoRef={videoRef} itemId={itemId} onFullscreen={onFullscreen} />
+      <VideoControls
+        videoRef={videoRef}
+        itemId={itemId}
+        onFullscreen={onFullscreen}
+        fullscreen={fullscreen}
+        hidden={chromeHidden}
+      />
     </>
   );
 }
@@ -87,10 +225,14 @@ function VideoControls({
   videoRef,
   itemId,
   onFullscreen,
+  fullscreen,
+  hidden,
 }: {
   videoRef: React.RefObject<HTMLVideoElement>;
   itemId: string;
   onFullscreen: () => void;
+  fullscreen: boolean;
+  hidden: boolean;
 }) {
   const [playing, setPlaying] = useState(true);
   const [cur, setCur] = useState(0);
@@ -98,8 +240,46 @@ function VideoControls({
   const [buf, setBuf] = useState(0);
   const [vol, setVol] = useState(1);
   const [muted, setMuted] = useState(false);
+  // Subtitle/caption tracks the browser exposes (in-band or <track> sidecars).
+  const [subTracks, setSubTracks] = useState<{ i: number; label: string }[]>([]);
+  const [activeTrack, setActiveTrack] = useState(-1); // -1 = off
+  const [capsMenu, setCapsMenu] = useState(false);
   const seeking = useRef(false);
   const trackRef = useRef<HTMLDivElement>(null);
+
+  // Watch the video's text tracks so the captions chooser only shows when present.
+  useEffect(() => {
+    const v = videoRef.current;
+    if (!v) return;
+    const tt = v.textTracks;
+    const sync = () => {
+      const list: { i: number; label: string }[] = [];
+      let active = -1;
+      for (let i = 0; i < tt.length; i++) {
+        const tr = tt[i];
+        if (tr.kind === "subtitles" || tr.kind === "captions") {
+          list.push({ i, label: tr.label || tr.language || `Track ${list.length + 1}` });
+          if (tr.mode === "showing") active = i;
+        }
+      }
+      setSubTracks(list);
+      setActiveTrack(active);
+    };
+    sync();
+    tt.addEventListener?.("addtrack", sync);
+    tt.addEventListener?.("removetrack", sync);
+    tt.addEventListener?.("change", sync);
+    return () => {
+      tt.removeEventListener?.("addtrack", sync);
+      tt.removeEventListener?.("removetrack", sync);
+      tt.removeEventListener?.("change", sync);
+    };
+  }, [videoRef, itemId]);
+
+  // Close the captions menu when the chrome hides.
+  useEffect(() => {
+    if (hidden) setCapsMenu(false);
+  }, [hidden]);
 
   // (Re)subscribe to the current <video> whenever the shown item changes.
   useEffect(() => {
@@ -158,6 +338,12 @@ function VideoControls({
     const v = videoRef.current;
     if (v) (v.paused ? v.play() : v.pause());
   };
+  const skip = (delta: number) => {
+    const v = videoRef.current;
+    if (!v) return;
+    v.currentTime = clamp(v.currentTime + delta, 0, v.duration || Infinity);
+    v.dispatchEvent(new CustomEvent("uiskip", { detail: delta < 0 ? "back" : "forward" }));
+  };
   const toggleMute = () => {
     const v = videoRef.current;
     if (v) v.muted = !v.muted;
@@ -168,13 +354,24 @@ function VideoControls({
     v.volume = value;
     v.muted = value === 0;
   };
+  const selectTrack = (i: number) => {
+    const v = videoRef.current;
+    if (v) {
+      const tt = v.textTracks;
+      for (let j = 0; j < tt.length; j++) tt[j].mode = j === i ? "showing" : "disabled";
+    }
+    setActiveTrack(i);
+    setCapsMenu(false);
+  };
 
   const btn = "rounded p-1.5 text-white/85 transition hover:bg-white/15 hover:text-white";
 
   return (
     <div
       data-control
-      className="pointer-events-auto absolute inset-x-0 bottom-0 z-20 flex items-center gap-3 bg-gradient-to-t from-black/90 via-black/70 to-transparent px-4 pb-3 pt-8 text-white"
+      className={`absolute inset-x-0 bottom-0 z-20 flex items-center gap-3 bg-gradient-to-t from-black/90 via-black/70 to-transparent px-4 pb-3 pt-8 text-white transition-opacity duration-300 ${
+        hidden ? "pointer-events-none opacity-0" : "pointer-events-auto opacity-100"
+      }`}
     >
       <button onClick={togglePlay} className={btn} aria-label={playing ? "Pause" : "Play"}>
         {playing ? (
@@ -188,6 +385,30 @@ function VideoControls({
           </svg>
         )}
       </button>
+
+      <button onClick={toggleMute} className={btn} aria-label={muted ? "Unmute" : "Mute"}>
+        {muted || vol === 0 ? (
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+            <path d="M5 9v6h4l5 5V4L9 9H5z" />
+            <path d="M16 9l4 4m0-4l-4 4" stroke="currentColor" strokeWidth="2" fill="none" />
+          </svg>
+        ) : (
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+            <path d="M5 9v6h4l5 5V4L9 9H5z" />
+            <path d="M16.5 8.5a5 5 0 0 1 0 7" stroke="currentColor" strokeWidth="2" fill="none" />
+          </svg>
+        )}
+      </button>
+      <input
+        type="range"
+        min={0}
+        max={1}
+        step={0.02}
+        value={muted ? 0 : vol}
+        onChange={(e) => setVolume(Number(e.target.value))}
+        className="w-20 accent-white"
+        aria-label="Volume"
+      />
 
       <span className="shrink-0 text-xs tabular-nums text-white/80">
         {fmtTime(cur)} / {fmtTime(dur)}
@@ -228,34 +449,76 @@ function VideoControls({
         />
       </div>
 
-      <button onClick={toggleMute} className={btn} aria-label={muted ? "Unmute" : "Mute"}>
-        {muted || vol === 0 ? (
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
-            <path d="M5 9v6h4l5 5V4L9 9H5z" />
-            <path d="M16 9l4 4m0-4l-4 4" stroke="currentColor" strokeWidth="2" fill="none" />
+      <button onClick={() => skip(-10)} className={btn} aria-label="Back 10 seconds" title="Back 10s">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+          <path d="M11 6L5 12l6 6V6z" />
+          <path d="M19 6l-6 6 6 6V6z" />
+        </svg>
+      </button>
+      <button onClick={() => skip(10)} className={btn} aria-label="Forward 10 seconds" title="Forward 10s">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+          <path d="M13 6l6 6-6 6V6z" />
+          <path d="M5 6l6 6-6 6V6z" />
+        </svg>
+      </button>
+
+      {subTracks.length > 0 && (
+        <div className="relative">
+          <button
+            onClick={() => setCapsMenu((o) => !o)}
+            aria-label="Captions"
+            title="Captions (CC)"
+            aria-pressed={activeTrack >= 0}
+            className={`${btn} ${activeTrack >= 0 ? "bg-white/20 text-white" : ""}`}
+          >
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <rect x="3" y="5" width="18" height="14" rx="2" />
+              <path d="M8 11h2M8 14h3M14 11h2M14 14h3" strokeLinecap="round" />
+            </svg>
+          </button>
+          {capsMenu && (
+            <div className="absolute bottom-full right-0 mb-2 min-w-32 overflow-hidden rounded-lg bg-black/90 py-1 text-sm ring-1 ring-white/10">
+              <button
+                onClick={() => selectTrack(-1)}
+                className={`block w-full px-3 py-1.5 text-left hover:bg-white/10 ${
+                  activeTrack < 0 ? "text-white" : "text-white/70"
+                }`}
+              >
+                Off
+              </button>
+              {subTracks.map((tr) => (
+                <button
+                  key={tr.i}
+                  onClick={() => selectTrack(tr.i)}
+                  className={`block w-full truncate px-3 py-1.5 text-left hover:bg-white/10 ${
+                    activeTrack === tr.i ? "text-white" : "text-white/70"
+                  }`}
+                >
+                  {tr.label}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      <button
+        onClick={onFullscreen}
+        className={btn}
+        aria-label={fullscreen ? "Exit fullscreen" : "Fullscreen"}
+        title={fullscreen ? "Exit fullscreen" : "Fullscreen"}
+      >
+        {fullscreen ? (
+          // Inward corners = currently fullscreen (click to exit).
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <path d="M9 4v5H4M15 4v5h5M9 20v-5H4M15 20v-5h5" />
           </svg>
         ) : (
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
-            <path d="M5 9v6h4l5 5V4L9 9H5z" />
-            <path d="M16.5 8.5a5 5 0 0 1 0 7" stroke="currentColor" strokeWidth="2" fill="none" />
+          // Outward corners = enter fullscreen.
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5" />
           </svg>
         )}
-      </button>
-      <input
-        type="range"
-        min={0}
-        max={1}
-        step={0.02}
-        value={muted ? 0 : vol}
-        onChange={(e) => setVolume(Number(e.target.value))}
-        className="w-20 accent-white"
-        aria-label="Volume"
-      />
-
-      <button onClick={onFullscreen} className={btn} aria-label="Fullscreen">
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-          <path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5" />
-        </svg>
       </button>
     </div>
   );

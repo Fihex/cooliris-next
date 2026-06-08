@@ -15,3 +15,18 @@ body {
   color: #e6e8ec;
   -webkit-font-smoothing: antialiased;
 }
+
+/* Transient play/pause/skip indicator in the video player. */
+@keyframes ui-flash {
+  0% {
+    opacity: 0.85;
+    transform: scale(0.8);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1.35);
+  }
+}
+.ui-flash > div {
+  animation: ui-flash 600ms ease-out forwards;
+}
