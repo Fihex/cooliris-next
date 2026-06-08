@@ -52,10 +52,10 @@ export function Toolbar(props: ToolbarProps) {
   const stillLoading = props.busy || props.progress.pending > 0;
 
   return (
-    <header className="pointer-events-auto absolute left-0 right-0 top-0 z-20 flex flex-wrap items-center gap-2 bg-gradient-to-b from-black/70 to-transparent px-4 py-3">
-      <div className="mr-2 flex items-baseline gap-1.5">
-        <span className="text-lg font-semibold tracking-tight">Cooliris</span>
-        <span className="text-lg font-light text-white/50">Next</span>
+    <header className="pointer-events-auto absolute left-0 right-0 top-0 z-20 flex flex-wrap items-center gap-1.5 bg-gradient-to-b from-black/70 to-transparent px-2.5 py-2 sm:gap-2 sm:px-4 sm:py-3">
+      <div className="mr-1 flex items-baseline gap-1.5 sm:mr-2">
+        <span className="text-base font-semibold tracking-tight sm:text-lg">Cooliris</span>
+        <span className="hidden text-base font-light text-white/50 sm:inline sm:text-lg">Next</span>
       </div>
 
       <Btn onClick={props.onOpen}>Open</Btn>
@@ -68,7 +68,7 @@ export function Toolbar(props: ToolbarProps) {
       <Btn onClick={props.onFullscreen}>Fullscreen</Btn>
 
       <div className="ml-auto flex items-center gap-2">
-        <Btn onClick={props.onOpenSettings}>⚙ Settings</Btn>
+        <Btn onClick={props.onOpenSettings}>Settings</Btn>
         <SortMenu sort={props.sort} onSort={props.onSort} />
         <DatesMenu
           from={props.fromDate}
@@ -86,7 +86,7 @@ export function Toolbar(props: ToolbarProps) {
             value={props.search}
             onChange={(e) => props.onSearch(e.target.value)}
             placeholder="Search…"
-            className="w-40 rounded-full bg-white/10 px-3 py-1.5 text-sm text-white placeholder-white/40 outline-none ring-white/20 focus:ring-2 sm:w-52"
+            className="w-28 rounded-full bg-white/10 px-3 py-1.5 text-sm text-white placeholder-white/40 outline-none ring-white/20 focus:ring-2 sm:w-52"
           />
           {props.search && (
             <button
@@ -165,7 +165,7 @@ function SortMenu({ sort, onSort }: { sort: SortKey; onSort: (k: SortKey) => voi
       {open && (
         <>
           <div className="fixed inset-0 z-30" onClick={() => setOpen(false)} />
-          <div className="absolute right-0 top-full z-40 mt-1 w-48 overflow-hidden rounded-xl bg-neutral-900 py-1 text-sm shadow-2xl ring-1 ring-white/10">
+          <div className="absolute right-0 top-full z-40 mt-1 w-56 overflow-hidden rounded-xl bg-neutral-900 py-1 text-sm shadow-2xl ring-1 ring-white/10">
             {SORT_OPTIONS.map((o) => (
               <button
                 key={o.key}
@@ -173,11 +173,12 @@ function SortMenu({ sort, onSort }: { sort: SortKey; onSort: (k: SortKey) => voi
                   onSort(o.key);
                   setOpen(false);
                 }}
-                className={`block w-full px-3 py-1.5 text-left transition hover:bg-white/10 ${
-                  o.key === active?.key ? "text-white" : "text-white/70"
+                className={`block w-full whitespace-nowrap px-3 py-1.5 text-left transition ${
+                  o.key === active?.key
+                    ? "bg-white/15 text-white"
+                    : "text-white/70 hover:bg-white/10"
                 }`}
               >
-                {o.key === active?.key ? "✓ " : "  "}
                 {o.label}
               </button>
             ))}
@@ -282,7 +283,7 @@ function Btn({
   return (
     <button
       onClick={onClick}
-      className={`rounded-full px-3 py-1.5 text-sm font-medium transition ${
+      className={`whitespace-nowrap rounded-full px-2.5 py-1 text-xs font-medium transition sm:px-3 sm:py-1.5 sm:text-sm ${
         active ? "bg-white text-black" : "bg-white/10 text-white hover:bg-white/20"
       }`}
     >
