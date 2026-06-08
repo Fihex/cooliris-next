@@ -10,4 +10,5 @@ contextBridge.exposeInMainWorld("electron", {
   pickFolder: () => ipcRenderer.invoke("pick-folder"),
   pickFiles: () => ipcRenderer.invoke("pick-files"),
   fetchText: (url: string) => ipcRenderer.invoke("fetch-text", url),
+  getCover: (abs: string) => ipcRenderer.invoke("get-cover", abs),
 });

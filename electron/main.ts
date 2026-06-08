@@ -2,6 +2,7 @@ import { app, BrowserWindow, dialog, ipcMain, Menu, net, protocol } from "electr
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { promises as fs } from "node:fs";
 import path from "node:path";
+import { parseFile } from "music-metadata";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -154,6 +155,19 @@ ipcMain.handle("pick-files", async () => {
     })
   );
   return { rootName: `${files.length} file(s)`, files };
+});
+
+// Read embedded cover art (ID3/FLAC/MP4) from an audio file → data URL, or null.
+ipcMain.handle("get-cover", async (_e, abs: string): Promise<string | null> => {
+  try {
+    const meta = await parseFile(abs, { duration: false });
+    const pic = meta.common.picture?.[0];
+    if (!pic) return null;
+    const b64 = Buffer.from(pic.data).toString("base64");
+    return `data:${pic.format || "image/jpeg"};base64,${b64}`;
+  } catch {
+    return null;
+  }
 });
 
 // Fetch a remote URL from the main process — no browser CORS, so the desktop app

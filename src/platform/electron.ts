@@ -34,6 +34,7 @@ interface ElectronBridge {
   pickFolder(): Promise<ScanResult | null>;
   pickFiles(): Promise<ScanResult | null>;
   fetchText(url: string): Promise<string>;
+  getCover(abs: string): Promise<string | null>;
 }
 
 declare global {
@@ -83,7 +84,8 @@ async function feedFromScan(res: ScanResult, onProgress?: ProgressFn): Promise<F
         };
       }
       if (isAudio(f.name)) {
-        const art = await makeAudioThumb(title);
+        // Prefer embedded cover art; fall back to a generated tile.
+        const art = (await window.electron!.getCover(f.abs)) ?? (await makeAudioThumb(title));
         return {
           id: `el-${eid++}`,
           type: "audio",
