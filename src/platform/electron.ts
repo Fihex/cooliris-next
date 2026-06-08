@@ -26,6 +26,7 @@ interface ScanFile {
   mtime: number;
   btime: number;
   subs?: SubFile[];
+  cover?: string;
 }
 interface ScanResult {
   rootName: string;
@@ -87,8 +88,11 @@ async function feedFromScan(res: ScanResult, onProgress?: ProgressFn): Promise<F
         };
       }
       if (isAudio(f.name)) {
-        // Prefer embedded cover art; fall back to a generated tile.
-        const art = (await window.electron!.getCover(f.abs)) ?? (await makeAudioThumb(title));
+        // Prefer embedded cover art, then a sidecar cover image, then a generated tile.
+        const art =
+          (await window.electron!.getCover(f.abs)) ??
+          (f.cover ? mediaUrl(f.cover) : null) ??
+          (await makeAudioThumb(title));
         return {
           id: `el-${eid++}`,
           type: "audio",

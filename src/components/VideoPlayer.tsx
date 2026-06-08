@@ -39,6 +39,8 @@ interface VideoPlayerProps {
   /** Fade out the control bar when the pointer is idle. */
   chromeHidden: boolean;
   onFullscreen: () => void;
+  /** Close the lightbox (used when clicking the empty letterbox around the frame). */
+  onRequestClose: () => void;
 }
 
 /** SubRip → WebVTT: add the header and use a dot (not comma) before milliseconds. */
@@ -89,6 +91,7 @@ export function VideoPlayer({
   fullscreen,
   chromeHidden,
   onFullscreen,
+  onRequestClose,
 }: VideoPlayerProps) {
   // Fetch each sidecar subtitle, convert .srt→.vtt, and expose as same-origin blob
   // URLs for <track> (avoids cross-origin track restrictions).
@@ -169,9 +172,29 @@ export function VideoPlayer({
             src={src}
             autoPlay
             draggable={false}
-            onClick={() => {
+            onClick={(e) => {
               const v = videoRef.current;
-              if (v) (v.paused ? v.play() : v.pause());
+              if (!v) return;
+              // object-contain letterboxes the frame inside the full-size element.
+              // A click on the empty bars (outside the actual frame) closes; a click
+              // on the frame toggles play.
+              const r = v.getBoundingClientRect();
+              const vw = v.videoWidth;
+              const vh = v.videoHeight;
+              if (vw && vh) {
+                const scale = Math.min(r.width / vw, r.height / vh);
+                const dw = vw * scale;
+                const dh = vh * scale;
+                const x0 = r.left + (r.width - dw) / 2;
+                const y0 = r.top + (r.height - dh) / 2;
+                const inFrame =
+                  e.clientX >= x0 && e.clientX <= x0 + dw && e.clientY >= y0 && e.clientY <= y0 + dh;
+                if (!inFrame) {
+                  onRequestClose();
+                  return;
+                }
+              }
+              v.paused ? v.play() : v.pause();
             }}
             className={`pointer-events-auto h-full w-full object-contain ${
               chromeHidden ? "cursor-none" : "cursor-pointer"

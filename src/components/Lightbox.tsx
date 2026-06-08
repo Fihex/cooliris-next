@@ -290,6 +290,7 @@ export function Lightbox({
           fullscreen={isFullscreen}
           chromeHidden={hideChrome}
           onFullscreen={toggleFullscreen}
+          onRequestClose={onClose}
         />
       ) : (
         <div ref={stageRef} className="absolute inset-0">

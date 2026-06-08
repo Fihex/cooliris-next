@@ -58,6 +58,25 @@ interface ScanFile {
   mtime: number;
   btime: number; // birthtime (created), falls back to mtime when unavailable
   subs?: SubFile[];
+  cover?: string; // sidecar cover image (absolute path) for audio without embedded art
+}
+
+// Common "whole album" cover filenames, checked when an audio file has no sibling
+// image of its own.
+const COVER_RE = /^(cover|folder|front|albumart(?:small)?|album|thumb)\.(jpe?g|png|webp|avif|bmp)$/i;
+
+/** Find a cover image next to an audio file: same-stem image first, then cover.jpg etc. */
+function audioCover(audioName: string, dir: string, names: string[]): string | null {
+  const stem = audioName.replace(/\.[^.]+$/, "").toLowerCase();
+  // 1) An image sharing the track's name (song.mp3 → song.jpg).
+  for (const n of names) {
+    if (IMAGE_RE.test(n) && n.replace(/\.[^.]+$/, "").toLowerCase() === stem) {
+      return path.join(dir, n);
+    }
+  }
+  // 2) A generic album cover in the same folder.
+  for (const n of names) if (COVER_RE.test(n)) return path.join(dir, n);
+  return null;
 }
 
 /** Find sidecar subtitle files (same stem) for a video, given its dir's entries. */
@@ -102,6 +121,7 @@ async function scanDir(root: string): Promise<ScanFile[]> {
         await walk(abs, rel);
       } else if (e.isFile() && isMedia(e.name)) {
         const subs = VIDEO_RE.test(e.name) ? siblingSubs(e.name, dir, names) : [];
+        const cover = AUDIO_RE.test(e.name) ? audioCover(e.name, dir, names) : null;
         const { mtime, btime } = await statTimes(abs);
         out.push({
           abs,
@@ -110,6 +130,7 @@ async function scanDir(root: string): Promise<ScanFile[]> {
           mtime,
           btime,
           subs: subs.length ? subs : undefined,
+          cover: cover ?? undefined,
         });
       }
     }
@@ -147,17 +168,23 @@ ipcMain.handle("pick-files", async () => {
     r.filePaths.map(async (abs) => {
       const name = path.basename(abs);
       let subs: SubFile[] | undefined;
-      if (VIDEO_RE.test(name)) {
+      let cover: string | undefined;
+      if (VIDEO_RE.test(name) || AUDIO_RE.test(name)) {
         try {
           const dir = path.dirname(abs);
-          const found = siblingSubs(name, dir, await fs.readdir(dir));
-          subs = found.length ? found : undefined;
+          const names = await fs.readdir(dir);
+          if (VIDEO_RE.test(name)) {
+            const found = siblingSubs(name, dir, names);
+            subs = found.length ? found : undefined;
+          } else {
+            cover = audioCover(name, dir, names) ?? undefined;
+          }
         } catch {
           /* ignore */
         }
       }
       const { mtime, btime } = await statTimes(abs);
-      return { abs, rel: name, name, mtime, btime, subs };
+      return { abs, rel: name, name, mtime, btime, subs, cover };
     })
   );
   return { rootName: `${files.length} file(s)`, files };
