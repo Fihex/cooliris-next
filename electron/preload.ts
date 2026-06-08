@@ -15,4 +15,5 @@ contextBridge.exposeInMainWorld("electron", {
   // created date (renderer only sees File.lastModified = modified).
   getPathForFile: (file: File) => webUtils.getPathForFile(file),
   statFile: (abs: string) => ipcRenderer.invoke("stat-file", abs),
+  scanPaths: (paths: string[]) => ipcRenderer.invoke("scan-paths", paths),
 });

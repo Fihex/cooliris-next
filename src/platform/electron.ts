@@ -39,6 +39,7 @@ interface ElectronBridge {
   getCover(abs: string): Promise<string | null>;
   getPathForFile(file: File): string;
   statFile(abs: string): Promise<{ mtime: number; btime: number } | null>;
+  scanPaths(paths: string[]): Promise<ScanResult | null>;
 }
 
 declare global {
@@ -143,11 +144,21 @@ export const electronPlatform: Platform = {
     return feedFromScan(r, onProgress);
   },
 
-  // Drag-and-drop / <input> reuse the web path (object URLs) — works in Electron too.
-  fromDataTransfer: (dt: DataTransfer, onProgress?: ProgressFn): Promise<Feed> =>
-    feedFromDataTransfer(dt, onProgress),
-  fromFileList: (files: File[], onProgress?: ProgressFn): Promise<Feed> =>
-    feedFromFiles(files, onProgress),
+  // Drag-and-drop / <input>: resolve the real paths and run the SAME native scan as
+  // the pickers → full parity (covers, sidecar subs, dates, seekable coolmedia URLs).
+  // Falls back to the web object-URL path if a path can't be resolved.
+  fromDataTransfer: async (dt: DataTransfer, onProgress?: ProgressFn): Promise<Feed> => {
+    const paths = Array.from(dt.files)
+      .map((f) => window.electron!.getPathForFile(f))
+      .filter(Boolean);
+    const r = paths.length ? await window.electron!.scanPaths(paths) : null;
+    return r ? feedFromScan(r, onProgress) : feedFromDataTransfer(dt, onProgress);
+  },
+  fromFileList: async (files: File[], onProgress?: ProgressFn): Promise<Feed> => {
+    const paths = files.map((f) => window.electron!.getPathForFile(f)).filter(Boolean);
+    const r = paths.length ? await window.electron!.scanPaths(paths) : null;
+    return r ? feedFromScan(r, onProgress) : feedFromFiles(files, onProgress);
+  },
 
   // Only the DnD/input fallbacks create object URLs; coolmedia:// needs no revoke.
   snapshotResources: () => currentLocalUrls(),

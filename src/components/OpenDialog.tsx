@@ -41,8 +41,14 @@ export function OpenDialog(props: OpenDialogProps) {
           </button>
         </div>
 
-        {/* The one and only drop zone */}
+        {/* Drop zone — also click it to choose a folder. */}
         <div
+          role="button"
+          tabIndex={0}
+          onClick={chooseFolder}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" || e.key === " ") chooseFolder();
+          }}
           onDragOver={(e) => {
             e.preventDefault();
             if (!over) setOver(true);
@@ -55,12 +61,12 @@ export function OpenDialog(props: OpenDialogProps) {
             setOver(false);
             if (e.dataTransfer) props.onDrop(e.dataTransfer);
           }}
-          className={`mb-4 flex h-36 flex-col items-center justify-center rounded-xl border-2 border-dashed text-center transition ${
-            over ? "border-white/70 bg-white/10" : "border-white/20 bg-white/5"
+          className={`mb-4 flex h-36 cursor-pointer flex-col items-center justify-center rounded-xl border-2 border-dashed text-center outline-none transition ${
+            over ? "border-white/70 bg-white/10" : "border-white/20 bg-white/5 hover:bg-white/10"
           }`}
         >
           <div className="text-sm font-medium">Drag &amp; drop files or a folder here</div>
-          <div className="mt-1 text-xs text-white/40">images, videos, and audio</div>
+          <div className="mt-1 text-xs text-white/40">or click to choose a folder · images, videos, audio</div>
         </div>
 
         <div className="flex gap-2">

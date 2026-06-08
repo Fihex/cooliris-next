@@ -204,6 +204,44 @@ ipcMain.handle("pick-files", async () => {
   return { rootName: `${files.length} file(s)`, files };
 });
 
+// Scan dropped / selected real paths (files or folders) exactly like the native
+// pickers, so drag-and-drop has full parity: embedded + sidecar covers, sidecar
+// subtitles, and modified/created dates.
+ipcMain.handle("scan-paths", async (_e, paths: string[]) => {
+  const files: ScanFile[] = [];
+  for (const p of paths) {
+    try {
+      const st = await fs.stat(p);
+      if (st.isDirectory()) {
+        files.push(...(await scanDir(p)));
+        continue;
+      }
+      const name = path.basename(p);
+      if (!isMedia(name)) continue;
+      const dir = path.dirname(p);
+      let subs: SubFile[] | undefined;
+      let cover: string | undefined;
+      try {
+        const names = await fs.readdir(dir);
+        if (VIDEO_RE.test(name)) {
+          const s = siblingSubs(name, dir, names);
+          subs = s.length ? s : undefined;
+        } else if (AUDIO_RE.test(name)) {
+          cover = audioCover(name, dir, names) ?? undefined;
+        }
+      } catch {
+        /* ignore */
+      }
+      const { mtime, btime } = await statTimes(p);
+      files.push({ abs: p, rel: name, name, mtime, btime, subs, cover });
+    } catch {
+      /* skip unreadable */
+    }
+  }
+  const rootName = paths.length === 1 ? path.basename(paths[0]) : `${files.length} item(s)`;
+  return { rootName, files };
+});
+
 // Read embedded cover art (ID3/FLAC/MP4) from an audio file → data URL, or null.
 // Read embedded cover art (ID3/FLAC/MP4/Ogg) with a dependency-free, bundled parser
 // → no dynamic import / asar resolution, instant during the scan, and leak-free.
