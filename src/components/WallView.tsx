@@ -277,6 +277,16 @@ export function WallView() {
   };
 
   const selectedItem = selected >= 0 ? items[selected] : null;
+
+  // The lightbox is opaque, so pause the WebGL wall while it's open — otherwise the
+  // wall keeps streaming/rendering tiles and the viewer's first zoom/pan janks.
+  useEffect(() => {
+    const scene = sceneRef.current;
+    if (!scene) return;
+    if (selectedItem) scene.pause();
+    else scene.resume();
+  }, [selectedItem]);
+
   // Hover tooltip is suppressed while the Titles toggle shows every label.
   const showHover = hover && selected < 0 && !showTitles;
   const loadPct = loadStage && loadStage.total > 0

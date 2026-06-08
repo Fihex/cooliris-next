@@ -255,6 +255,22 @@ export class WallScene {
     this.selectIndex((this.selectedIndex - 1 + this.tiles.length) % this.tiles.length);
   }
 
+  /**
+   * Pause the render loop + lazy texture loading. The wall is fully hidden behind
+   * the opaque lightbox, so this frees the main thread/GPU for the viewer's
+   * zoom/pan (which otherwise janks while the wall is still streaming tiles).
+   */
+  pause(): void {
+    this.running = false;
+  }
+
+  resume(): void {
+    if (this.running) return;
+    this.running = true;
+    this.lastTick = 0; // avoid a giant dt after the gap
+    this.animate();
+  }
+
   setSlideshow(on: boolean): void {
     this.slideshow = on;
     this.slideshowTimer = 0;
