@@ -3,40 +3,11 @@ productName: Cooliris Next
 directories:
   output: release
   buildResources: build
-# Vite emits the renderer to dist/ and the main/preload to dist-electron/.
-# music-metadata is NOT bundled (it dynamic-imports its parsers), so its runtime
-# dependency tree is packaged from node_modules and unpacked so ESM import() resolves.
+# Vite emits the renderer to dist/ and the main/preload to dist-electron/. Cover-art
+# extraction is dependency-free (electron/coverArt.ts), so no node_modules to package.
 files:
   - dist/**
   - dist-electron/**
-  - "node_modules/music-metadata/**"
-  - "node_modules/@borewit/text-codec/**"
-  - "node_modules/@tokenizer/inflate/**"
-  - "node_modules/@tokenizer/token/**"
-  - "node_modules/content-type/**"
-  - "node_modules/debug/**"
-  - "node_modules/file-type/**"
-  - "node_modules/ieee754/**"
-  - "node_modules/media-typer/**"
-  - "node_modules/ms/**"
-  - "node_modules/strtok3/**"
-  - "node_modules/token-types/**"
-  - "node_modules/uint8array-extras/**"
-  - "node_modules/win-guid/**"
-asarUnpack:
-  - "node_modules/music-metadata/**"
-  - "node_modules/@borewit/**"
-  - "node_modules/@tokenizer/**"
-  - "node_modules/content-type/**"
-  - "node_modules/debug/**"
-  - "node_modules/file-type/**"
-  - "node_modules/ieee754/**"
-  - "node_modules/media-typer/**"
-  - "node_modules/ms/**"
-  - "node_modules/strtok3/**"
-  - "node_modules/token-types/**"
-  - "node_modules/uint8array-extras/**"
-  - "node_modules/win-guid/**"
 linux:
   target: AppImage
   category: Graphics
