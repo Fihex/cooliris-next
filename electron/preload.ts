@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer } from "electron";
+import { contextBridge, ipcRenderer, webUtils } from "electron";
 
 /**
  * The only surface exposed to the renderer. Mirrors the shape consumed by
@@ -11,4 +11,8 @@ contextBridge.exposeInMainWorld("electron", {
   pickFiles: () => ipcRenderer.invoke("pick-files"),
   fetchText: (url: string) => ipcRenderer.invoke("fetch-text", url),
   getCover: (abs: string) => ipcRenderer.invoke("get-cover", abs),
+  // For drag-and-drop / <input> files: resolve the real path, then stat it for the
+  // created date (renderer only sees File.lastModified = modified).
+  getPathForFile: (file: File) => webUtils.getPathForFile(file),
+  statFile: (abs: string) => ipcRenderer.invoke("stat-file", abs),
 });

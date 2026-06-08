@@ -1,4 +1,5 @@
 import type { Feed, MediaItem, ProgressFn } from "./types";
+import { parseCover } from "./coverArt";
 
 const IMAGE_RE = /\.(jpe?g|png|gif|webp|avif|bmp|svg)$/i;
 // mkv/avi are listed so they appear on the wall; Chromium can't decode/poster
@@ -151,11 +152,38 @@ export async function makeAudioThumb(title: string): Promise<string | null> {
  * the wall decodes/loads them lazily). Videos get a poster frame; audio gets a
  * generated cover-art tile.
  */
+/** Extract embedded cover art from an audio File → a tracked blob URL, or null. */
+async function fileCover(file: File): Promise<string | null> {
+  try {
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    const ext = file.name.slice(file.name.lastIndexOf(".") + 1);
+    const c = parseCover(bytes, ext);
+    if (!c) return null;
+    // Copy into a standalone ArrayBuffer-backed array (detaches the view + satisfies BlobPart).
+    const img = new Uint8Array(c.data.length);
+    img.set(c.data);
+    return track(URL.createObjectURL(new Blob([img], { type: c.mime })));
+  } catch {
+    return null;
+  }
+}
+
 async function fileToItem(file: File, pathHint?: string): Promise<MediaItem> {
   const fullUrl = track(URL.createObjectURL(file));
   const path = pathHint ?? file.name; // relative path within the opened folder
   const title = file.name.replace(/\.[^.]+$/, ""); // bare filename (no folders)
-  const date = file.lastModified || undefined;
+  let date = file.lastModified || undefined;
+  let created: number | undefined;
+  // In Electron, resolve the real path to also get the created (birthtime) date, so
+  // drag-and-drop matches the folder scan (the renderer alone only has lastModified).
+  const realPath = window.electron?.getPathForFile?.(file);
+  if (realPath) {
+    const meta = await window.electron!.statFile(realPath);
+    if (meta) {
+      date = meta.mtime || date;
+      created = meta.btime || undefined;
+    }
+  }
   if (isVideo(file.name)) {
     const poster = await makeVideoThumb(fullUrl);
     return {
@@ -166,10 +194,12 @@ async function fileToItem(file: File, pathHint?: string): Promise<MediaItem> {
       title,
       path,
       date,
+      created,
     };
   }
   if (isAudio(file.name)) {
-    const art = await makeAudioThumb(title);
+    // Embedded cover art (parsed from the file's bytes in the renderer) → generated tile.
+    const art = (await fileCover(file)) ?? (await makeAudioThumb(title));
     return {
       id: `local-${localId++}`,
       type: "audio",
@@ -178,6 +208,7 @@ async function fileToItem(file: File, pathHint?: string): Promise<MediaItem> {
       title,
       path,
       date,
+      created,
       aspect: 512 / 384,
     };
   }
@@ -190,6 +221,7 @@ async function fileToItem(file: File, pathHint?: string): Promise<MediaItem> {
     title,
     path,
     date,
+    created,
   };
 }
 

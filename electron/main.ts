@@ -196,11 +196,25 @@ ipcMain.handle("pick-files", async () => {
 ipcMain.handle("get-cover", async (_e, abs: string): Promise<string | null> => {
   try {
     const c = await extractCoverArt(abs);
-    return c ? `data:${c.mime};base64,${c.data.toString("base64")}` : null;
+    return c ? `data:${c.mime};base64,${Buffer.from(c.data).toString("base64")}` : null;
   } catch {
     return null;
   }
 });
+
+// modified + created (birthtime) times for a path — used to give drag-and-drop files
+// the same created date as the folder scan.
+ipcMain.handle(
+  "stat-file",
+  async (_e, abs: string): Promise<{ mtime: number; btime: number } | null> => {
+    try {
+      const s = await fs.stat(abs);
+      return { mtime: s.mtimeMs, btime: s.birthtimeMs || s.mtimeMs };
+    } catch {
+      return null;
+    }
+  }
+);
 
 // Fetch a remote URL from the main process — no browser CORS, so the desktop app
 // loads remote JSON feeds directly (no third-party proxy).

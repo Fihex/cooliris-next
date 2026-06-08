@@ -37,6 +37,8 @@ interface ElectronBridge {
   pickFiles(): Promise<ScanResult | null>;
   fetchText(url: string): Promise<string>;
   getCover(abs: string): Promise<string | null>;
+  getPathForFile(file: File): string;
+  statFile(abs: string): Promise<{ mtime: number; btime: number } | null>;
 }
 
 declare global {

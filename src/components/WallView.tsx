@@ -68,7 +68,9 @@ export function WallView() {
     const filtered = masterRef.current.filter((it) => {
       if (query && !(it.title ?? "").toLowerCase().includes(query)) return false;
       if (hasDate) {
-        const ts = useCreated ? it.created : it.date;
+        // Created falls back to modified for items that don't carry a created date
+        // (e.g. drag-and-dropped files), so it never hides them.
+        const ts = useCreated ? it.created ?? it.date : it.date;
         if (ts == null) return false;
         if (fromMs !== null && ts < fromMs) return false;
         if (toMs !== null && ts > toMs) return false;
