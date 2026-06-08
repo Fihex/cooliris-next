@@ -1,8 +1,22 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu, net, protocol } from "electron";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { promises as fs } from "node:fs";
+import { promises as fs, createReadStream } from "node:fs";
+import { Readable } from "node:stream";
 import path from "node:path";
 import { extractCoverArt } from "./coverArt";
+
+// Content-Type for the local-media protocol — needed for correct playback/decoding.
+const MIME: Record<string, string> = {
+  ".mp4": "video/mp4", ".webm": "video/webm", ".ogv": "video/ogg", ".mov": "video/quicktime",
+  ".m4v": "video/x-m4v", ".mkv": "video/x-matroska", ".avi": "video/x-msvideo",
+  ".mp3": "audio/mpeg", ".wav": "audio/wav", ".ogg": "audio/ogg", ".oga": "audio/ogg",
+  ".flac": "audio/flac", ".m4a": "audio/mp4", ".aac": "audio/aac", ".opus": "audio/opus",
+  ".weba": "audio/webm",
+  ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png", ".gif": "image/gif",
+  ".webp": "image/webp", ".avif": "image/avif", ".bmp": "image/bmp", ".svg": "image/svg+xml",
+};
+const mimeFor = (p: string): string =>
+  MIME[p.slice(p.lastIndexOf(".")).toLowerCase()] || "application/octet-stream";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -273,20 +287,41 @@ function createWindow() {
 
 app.whenReady().then(() => {
   protocol.handle("coolmedia", async (request) => {
-    const url = new URL(request.url);
-    const abs = decodeURIComponent(url.pathname.replace(/^\//, ""));
-    const res = await net.fetch(pathToFileURL(abs).toString());
-    // The renderer lives on a different origin (app://bundle), and it consumes
-    // these files as WebGL textures (THREE.TextureLoader uses crossOrigin="anonymous")
-    // and draws videos to a <canvas> for posters. Without CORS the image loads are
-    // rejected and the canvas is tainted → no previews. Allow it explicitly.
-    const headers = new Headers(res.headers);
-    headers.set("Access-Control-Allow-Origin", "*");
-    return new Response(res.body, {
-      status: res.status,
-      statusText: res.statusText,
-      headers,
-    });
+    const abs = decodeURIComponent(new URL(request.url).pathname.replace(/^\//, ""));
+    let size: number;
+    try {
+      size = (await fs.stat(abs)).size;
+    } catch {
+      return new Response(null, { status: 404 });
+    }
+    // ACAO so the app://bundle renderer can use these as WebGL textures / canvas
+    // posters; Accept-Ranges so <video>/<audio> can seek. Streamed (never read whole
+    // files into JS); the read stream closes when the response is consumed/cancelled.
+    const base: Record<string, string> = {
+      "Access-Control-Allow-Origin": "*",
+      "Accept-Ranges": "bytes",
+      "Content-Type": mimeFor(abs),
+    };
+    const stream = (start?: number, end?: number) => {
+      const rs = createReadStream(abs, start === undefined ? {} : { start, end });
+      rs.on("error", () => rs.destroy());
+      return Readable.toWeb(rs) as unknown as ReadableStream;
+    };
+
+    const m = /bytes=(\d*)-(\d*)/.exec(request.headers.get("Range") ?? "");
+    if (m) {
+      let start = m[1] ? parseInt(m[1], 10) : 0;
+      let end = m[2] ? parseInt(m[2], 10) : size - 1;
+      if (!Number.isFinite(start) || start < 0 || start >= size) {
+        return new Response(null, { status: 416, headers: { ...base, "Content-Range": `bytes */${size}` } });
+      }
+      end = Math.min(end, size - 1);
+      return new Response(stream(start, end), {
+        status: 206,
+        headers: { ...base, "Content-Range": `bytes ${start}-${end}/${size}`, "Content-Length": String(end - start + 1) },
+      });
+    }
+    return new Response(stream(), { status: 200, headers: { ...base, "Content-Length": String(size) } });
   });
 
   // Serve the renderer bundle from dist/, with SPA fallback to index.html.
