@@ -6,6 +6,23 @@ export interface LoadProgress {
   pending: number;
 }
 
+export type SortKey =
+  | "name-asc"
+  | "name-desc"
+  | "modified-desc"
+  | "modified-asc"
+  | "created-desc"
+  | "created-asc";
+
+const SORT_OPTIONS: { key: SortKey; label: string }[] = [
+  { key: "name-asc", label: "Name (A → Z)" },
+  { key: "name-desc", label: "Name (Z → A)" },
+  { key: "modified-desc", label: "Modified (newest)" },
+  { key: "modified-asc", label: "Modified (oldest)" },
+  { key: "created-desc", label: "Created (newest)" },
+  { key: "created-asc", label: "Created (oldest)" },
+];
+
 interface ToolbarProps {
   title?: string;
   count: number;
@@ -17,6 +34,8 @@ interface ToolbarProps {
   toDate: string;
   dateField: "modified" | "created";
   hasCreated: boolean;
+  sort: SortKey;
+  onSort: (k: SortKey) => void;
   onOpen: () => void;
   onSearch: (q: string) => void;
   onFromDate: (d: string) => void;
@@ -48,6 +67,7 @@ export function Toolbar(props: ToolbarProps) {
 
       <div className="ml-auto flex items-center gap-2">
         <Btn onClick={props.onOpenSettings}>⚙ Settings</Btn>
+        <SortMenu sort={props.sort} onSort={props.onSort} />
         <DatesMenu
           from={props.fromDate}
           to={props.toDate}
@@ -127,6 +147,41 @@ function DateField({ value, onChange }: { value: string; onChange: (v: string) =
         onChange={(e) => onChange(e.target.value)}
         className="pointer-events-none absolute right-2 top-1/2 h-px w-px -translate-y-1/2 opacity-0 [color-scheme:dark]"
       />
+    </div>
+  );
+}
+
+/** Sort-order dropdown (name / modified / created, asc & desc). */
+function SortMenu({ sort, onSort }: { sort: SortKey; onSort: (k: SortKey) => void }) {
+  const [open, setOpen] = useState(false);
+  const active = SORT_OPTIONS.find((o) => o.key === sort);
+  return (
+    <div className="relative">
+      <Btn onClick={() => setOpen((o) => !o)} active={open}>
+        Sort
+      </Btn>
+      {open && (
+        <>
+          <div className="fixed inset-0 z-30" onClick={() => setOpen(false)} />
+          <div className="absolute right-0 top-full z-40 mt-1 w-48 overflow-hidden rounded-xl bg-neutral-900 py-1 text-sm shadow-2xl ring-1 ring-white/10">
+            {SORT_OPTIONS.map((o) => (
+              <button
+                key={o.key}
+                onClick={() => {
+                  onSort(o.key);
+                  setOpen(false);
+                }}
+                className={`block w-full px-3 py-1.5 text-left transition hover:bg-white/10 ${
+                  o.key === active?.key ? "text-white" : "text-white/70"
+                }`}
+              >
+                {o.key === active?.key ? "✓ " : "  "}
+                {o.label}
+              </button>
+            ))}
+          </div>
+        </>
+      )}
     </div>
   );
 }

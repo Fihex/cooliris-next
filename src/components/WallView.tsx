@@ -8,7 +8,7 @@ import {
 } from "@/feed/jsonFeed";
 import { platform } from "@/platform";
 import { embed, type WallController } from "@/embed/cooliris-embed";
-import { Toolbar, type LoadProgress } from "./Toolbar";
+import { Toolbar, type LoadProgress, type SortKey } from "./Toolbar";
 import { OpenDialog } from "./OpenDialog";
 import { JsonDialog } from "./JsonDialog";
 import { SettingsDialog } from "./SettingsDialog";
@@ -27,6 +27,7 @@ export function WallView() {
   const fromRef = useRef(""); // yyyy-mm-dd
   const toRef = useRef("");
   const dateFieldRef = useRef<"modified" | "created">("modified");
+  const sortRef = useRef<SortKey>("name-asc");
   const feedToken = useRef(0); // only the most recent open() applies its result
 
   const [items, setItems] = useState<MediaItem[]>([]);
@@ -47,6 +48,7 @@ export function WallView() {
   const [toDate, setToDate] = useState("");
   const [dateField, setDateField] = useState<"modified" | "created">("modified");
   const [hasCreated, setHasCreated] = useState(false); // created dates available (Electron)
+  const [sort, setSort] = useState<SortKey>("name-asc");
   const [progress, setProgress] = useState<LoadProgress>({ loaded: 0, total: 0, pending: 0 });
   const [hover, setHover] = useState<MediaItem | null>(null);
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
@@ -77,10 +79,11 @@ export function WallView() {
       }
       return true;
     });
-    itemsRef.current = filtered;
-    setItems(filtered);
+    const sorted = sortItems(filtered, sortRef.current);
+    itemsRef.current = sorted;
+    setItems(sorted);
     setSelected(-1);
-    sceneRef.current?.setItems(filtered);
+    sceneRef.current?.setItems(sorted);
   }, []);
 
   const applyFeed = useCallback(
@@ -310,6 +313,12 @@ export function WallView() {
           toDate={toDate}
           dateField={dateField}
           hasCreated={hasCreated}
+          sort={sort}
+          onSort={(k) => {
+            setSort(k);
+            sortRef.current = k;
+            applyFilters();
+          }}
           onOpen={() => setOpenOpen(true)}
           onSearch={(q) => {
             setSearch(q);
@@ -506,6 +515,25 @@ function EdgeArrow({
 }
 
 /** Parse a typed date ("YYYY-MM-DD" or anything Date.parse accepts) to epoch ms. */
+const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
+
+/** Sort items by the chosen key (created falls back to modified). */
+function sortItems(items: MediaItem[], key: SortKey): MediaItem[] {
+  const arr = items.slice();
+  const name = (i: MediaItem) => i.title ?? i.path ?? "";
+  const mod = (i: MediaItem) => i.date ?? 0;
+  const cre = (i: MediaItem) => i.created ?? i.date ?? 0;
+  switch (key) {
+    case "name-asc": arr.sort((a, b) => collator.compare(name(a), name(b))); break;
+    case "name-desc": arr.sort((a, b) => collator.compare(name(b), name(a))); break;
+    case "modified-desc": arr.sort((a, b) => mod(b) - mod(a)); break;
+    case "modified-asc": arr.sort((a, b) => mod(a) - mod(b)); break;
+    case "created-desc": arr.sort((a, b) => cre(b) - cre(a)); break;
+    case "created-asc": arr.sort((a, b) => cre(a) - cre(b)); break;
+  }
+  return arr;
+}
+
 function parseDayInput(value: string, endOfDay: boolean): number | null {
   const v = value.trim();
   if (!v) return null;
