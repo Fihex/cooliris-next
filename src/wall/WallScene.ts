@@ -538,12 +538,14 @@ export class WallScene {
   }
 
   /**
-   * Load a texture, downscaling local (blob/data) images so a huge photo doesn't
-   * upload a 50MB texture. Remote URLs go through the plain loader (avoids CORS
-   * canvas-tainting). Full-res is swapped back in on focus via loadFull().
+   * Load a texture, downscaling local images so a huge photo doesn't upload a 50MB
+   * texture. blob:/data:/coolmedia: are decoded off the main thread in a Web Worker
+   * (coolmedia:// sends CORS, so it isn't canvas-tainted) — this keeps scrolling
+   * smooth. Remote http(s) URLs go through the plain loader (may lack CORS). Full-res
+   * is swapped back in on focus via loadFull().
    */
   private async acquireTexture(url: string, maxEdge = 512): Promise<THREE.Texture> {
-    if (url.startsWith("blob:") || url.startsWith("data:")) {
+    if (url.startsWith("blob:") || url.startsWith("data:") || url.startsWith("coolmedia:")) {
       // 1) Decode + downscale in a Web Worker (off the main thread entirely).
       try {
         const bmp = await this.workerDecode(url, maxEdge);
