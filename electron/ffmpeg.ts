@@ -5,7 +5,6 @@
 
 import { app } from "electron";
 import { spawn } from "node:child_process";
-import { Readable } from "node:stream";
 import { existsSync } from "node:fs";
 import path from "node:path";
 
@@ -105,15 +104,18 @@ export interface StreamOpts {
   hwAccel: boolean;
 }
 
-/** Spawn ffmpeg → fragmented MP4 on stdout. Returns a web stream + a cancel(). */
+/** Spawn ffmpeg → fragmented MP4 on stdout. Returns a web stream + a cancel(). The
+ *  stream applies real backpressure (pause ffmpeg when the player's buffer is full,
+ *  resume on pull) — otherwise the pipe fills and playback dies after a few seconds. */
 export function streamMedia(abs: string, opts: StreamOpts): { body: ReadableStream; cancel: () => void } {
   const args: string[] = ["-hide_banner", "-loglevel", "error"];
   if (opts.hwAccel) args.push("-hwaccel", "auto"); // GPU-assisted decode
   if (opts.seek && opts.seek > 0.1) args.push("-ss", String(opts.seek));
   args.push("-i", abs);
   if (opts.transcode) {
-    // Software H.264 encode (reliable everywhere). Full hardware encode is a follow-up.
-    args.push("-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-pix_fmt", "yuv420p");
+    // Realtime-friendly software H.264 (keeps up with playback). HW encode is a follow-up.
+    args.push("-c:v", "libx264", "-preset", "ultrafast", "-tune", "zerolatency");
+    args.push("-crf", "23", "-pix_fmt", "yuv420p");
     args.push("-c:a", "aac", "-b:a", "192k", "-ac", "2");
   } else {
     args.push("-c", "copy");
@@ -121,18 +123,52 @@ export function streamMedia(abs: string, opts: StreamOpts): { body: ReadableStre
   args.push("-movflags", "frag_keyframe+empty_moov+default_base_moof", "-f", "mp4", "pipe:1");
 
   const p = spawn(ffmpegBin(), args);
-  p.stderr.on("data", () => {}); // drain so it doesn't stall
-  p.on("error", () => {});
-  return {
-    body: Readable.toWeb(p.stdout) as unknown as ReadableStream,
-    cancel: () => {
-      try {
-        p.kill("SIGKILL");
-      } catch {
-        /* already gone */
-      }
-    },
+  let err = "";
+  p.stderr.on("data", (d) => {
+    err = (err + d).slice(-4000);
+  });
+  p.on("error", (e) => console.error("[ffmpeg] spawn failed:", (e as Error).message));
+  p.on("close", (code) => {
+    if (code) console.error(`[ffmpeg] exited ${code}:`, err.slice(-600));
+  });
+
+  const kill = () => {
+    try {
+      p.kill("SIGKILL");
+    } catch {
+      /* already gone */
+    }
   };
+
+  const body = new ReadableStream({
+    start(controller) {
+      p.stdout.on("data", (chunk: Buffer) => {
+        try {
+          controller.enqueue(chunk);
+        } catch {
+          kill();
+          return;
+        }
+        if (controller.desiredSize !== null && controller.desiredSize <= 0) p.stdout.pause();
+      });
+      p.stdout.on("end", () => {
+        try {
+          controller.close();
+        } catch {
+          /* already closed */
+        }
+      });
+      p.stdout.on("error", kill);
+    },
+    pull() {
+      p.stdout.resume();
+    },
+    cancel() {
+      kill();
+    },
+  });
+
+  return { body, cancel: kill };
 }
 
 /* --------------------------- posters & subtitles ----------------------------- */
