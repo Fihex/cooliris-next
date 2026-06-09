@@ -4,6 +4,8 @@ import { promises as fs, createReadStream } from "node:fs";
 import { Readable } from "node:stream";
 import path from "node:path";
 import { extractCoverArt } from "./coverArt";
+import { loadConfig, getConfig, updateFfmpeg } from "./config";
+import { probe, streamMedia, makePoster, extractSubtitleVtt } from "./ffmpeg";
 
 // Content-Type for the local-media protocol — needed for correct playback/decoding.
 const MIME: Record<string, string> = {
@@ -49,6 +51,18 @@ protocol.registerSchemesAsPrivileged([
   {
     scheme: "app",
     privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true },
+  },
+  // On-the-fly ffmpeg remux/transcode of non-native videos (mkv/avi/HEVC/AC-3/DTS).
+  {
+    scheme: "cooltranscode",
+    privileges: {
+      standard: true,
+      secure: true,
+      supportFetchAPI: true,
+      stream: true,
+      bypassCSP: true,
+      corsEnabled: true,
+    },
   },
 ]);
 
@@ -242,7 +256,24 @@ ipcMain.handle("scan-paths", async (_e, paths: string[]) => {
   return { rootName, files };
 });
 
-// Read embedded cover art (ID3/FLAC/MP4) from an audio file → data URL, or null.
+/* ------------------------------- ffmpeg layer ------------------------------- */
+// All gated on config.ffmpeg.enabled so it's a no-op when the feature is off.
+ipcMain.handle("get-config", () => getConfig());
+ipcMain.handle("set-hwaccel", (_e, on: boolean) => updateFfmpeg({ hwAccel: !!on }));
+ipcMain.handle("set-ffmpeg-enabled", (_e, on: boolean) => updateFfmpeg({ enabled: !!on }));
+
+ipcMain.handle("ff-probe", async (_e, abs: string, container: string) =>
+  getConfig().ffmpeg.enabled ? probe(abs, container) : null
+);
+ipcMain.handle("ff-poster", async (_e, abs: string): Promise<string | null> => {
+  if (!getConfig().ffmpeg.enabled) return null;
+  const buf = await makePoster(abs);
+  return buf ? `data:image/jpeg;base64,${buf.toString("base64")}` : null;
+});
+ipcMain.handle("ff-subtitle", async (_e, abs: string, index: number): Promise<string | null> =>
+  getConfig().ffmpeg.enabled ? extractSubtitleVtt(abs, index) : null
+);
+
 // Read embedded cover art (ID3/FLAC/MP4/Ogg) with a dependency-free, bundled parser
 // → no dynamic import / asar resolution, instant during the scan, and leak-free.
 ipcMain.handle("get-cover", async (_e, abs: string): Promise<string | null> => {
@@ -323,7 +354,33 @@ function createWindow() {
   });
 }
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
+  await loadConfig();
+
+  // On-the-fly remux/transcode of non-native videos. ?t=<seconds> restarts ffmpeg at
+  // an offset (for seeking). Streamed as fragmented MP4; ffmpeg is killed on abort.
+  protocol.handle("cooltranscode", async (request) => {
+    if (!getConfig().ffmpeg.enabled) return new Response(null, { status: 404 });
+    const url = new URL(request.url);
+    const abs = decodeURIComponent(url.pathname.replace(/^\//, ""));
+    const seek = parseFloat(url.searchParams.get("t") ?? "0") || 0;
+    const info = await probe(abs, path.extname(abs).slice(1).toLowerCase());
+    const { body, cancel } = streamMedia(abs, {
+      seek,
+      transcode: info ? info.mode === "transcode" : false,
+      hwAccel: getConfig().ffmpeg.hwAccel,
+    });
+    request.signal?.addEventListener?.("abort", cancel);
+    return new Response(body, {
+      status: 200,
+      headers: {
+        "Content-Type": "video/mp4",
+        "Access-Control-Allow-Origin": "*",
+        "Cache-Control": "no-store",
+      },
+    });
+  });
+
   protocol.handle("coolmedia", async (request) => {
     const abs = decodeURIComponent(new URL(request.url).pathname.replace(/^\//, ""));
     let size: number;

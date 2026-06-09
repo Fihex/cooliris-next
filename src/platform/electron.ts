@@ -40,6 +40,29 @@ interface ElectronBridge {
   getPathForFile(file: File): string;
   statFile(abs: string): Promise<{ mtime: number; btime: number } | null>;
   scanPaths(paths: string[]): Promise<ScanResult | null>;
+  // ffmpeg layer (extended formats)
+  getConfig(): Promise<{ ffmpeg: { enabled: boolean; hwAccel: boolean } } | null>;
+  setHwAccel(on: boolean): Promise<unknown>;
+  setFfmpegEnabled(on: boolean): Promise<unknown>;
+  ffProbe(abs: string, container: string): Promise<FfProbe | null>;
+  ffPoster(abs: string): Promise<string | null>;
+  ffSubtitle(abs: string, index: number): Promise<string | null>;
+}
+
+export interface FfProbe {
+  durationSec: number;
+  mode: "native" | "remux" | "transcode";
+  subtitles: { index: number; codec: string; lang?: string; title?: string; text: boolean }[];
+}
+
+// Containers Chromium can demux on its own; others go through the ffmpeg transcode URL.
+const NATIVE_VIDEO = new Set(["mp4", "webm", "m4v", "ogv"]);
+const transcodeUrl = (abs: string) => `cooltranscode://v/${encodeURIComponent(abs)}`;
+
+let _cfg: Promise<{ ffmpeg: { enabled: boolean; hwAccel: boolean } } | null> | undefined;
+async function ffmpegOn(): Promise<boolean> {
+  _cfg ??= window.electron?.getConfig?.() ?? Promise.resolve(null);
+  return !!(await _cfg)?.ffmpeg.enabled;
 }
 
 declare global {
@@ -73,6 +96,27 @@ async function feedFromScan(res: ScanResult, onProgress?: ProgressFn): Promise<F
       const date = f.mtime || undefined;
       const created = f.btime || undefined;
       if (isVideo(f.name)) {
+        const subs = f.subs?.map((s) => ({
+          url: mediaUrl(s.abs),
+          label: s.label,
+          srt: s.ext === "srt",
+        }));
+        const ext = f.name.slice(f.name.lastIndexOf(".") + 1).toLowerCase();
+        // Non-native containers/codecs (mkv/avi/…) → ffmpeg poster + transcode stream.
+        if (!NATIVE_VIDEO.has(ext) && (await ffmpegOn())) {
+          const poster = await window.electron!.ffPoster(f.abs);
+          return {
+            id: `el-${eid++}`,
+            type: "video",
+            thumb: poster ?? "",
+            full: transcodeUrl(f.abs),
+            title,
+            path: f.rel,
+            date,
+            created,
+            subs,
+          };
+        }
         const poster = await makeVideoThumb(url);
         return {
           id: `el-${eid++}`,
@@ -83,11 +127,7 @@ async function feedFromScan(res: ScanResult, onProgress?: ProgressFn): Promise<F
           path: f.rel,
           date,
           created,
-          subs: f.subs?.map((s) => ({
-            url: mediaUrl(s.abs),
-            label: s.label,
-            srt: s.ext === "srt",
-          })),
+          subs,
         };
       }
       if (isAudio(f.name)) {

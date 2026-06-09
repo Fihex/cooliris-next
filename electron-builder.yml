@@ -3,11 +3,16 @@ productName: Cooliris Next
 directories:
   output: release
   buildResources: build
-# Vite emits the renderer to dist/ and the main/preload to dist-electron/. Cover-art
-# extraction is dependency-free (electron/coverArt.ts), so no node_modules to package.
+# Vite emits the renderer to dist/ and the main/preload to dist-electron/. The ffmpeg
+# layer needs its binaries shipped (and unpacked from the asar so they can be spawned).
 files:
   - dist/**
   - dist-electron/**
+  - "node_modules/ffmpeg-static/**"
+  - "node_modules/ffprobe-static/**"
+asarUnpack:
+  - "node_modules/ffmpeg-static/**"
+  - "node_modules/ffprobe-static/**"
 linux:
   target: AppImage
   category: Graphics

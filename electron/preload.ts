@@ -16,4 +16,11 @@ contextBridge.exposeInMainWorld("electron", {
   getPathForFile: (file: File) => webUtils.getPathForFile(file),
   statFile: (abs: string) => ipcRenderer.invoke("stat-file", abs),
   scanPaths: (paths: string[]) => ipcRenderer.invoke("scan-paths", paths),
+  // ffmpeg layer (extended formats) — no-ops when disabled in config.
+  getConfig: () => ipcRenderer.invoke("get-config"),
+  setHwAccel: (on: boolean) => ipcRenderer.invoke("set-hwaccel", on),
+  setFfmpegEnabled: (on: boolean) => ipcRenderer.invoke("set-ffmpeg-enabled", on),
+  ffProbe: (abs: string, container: string) => ipcRenderer.invoke("ff-probe", abs, container),
+  ffPoster: (abs: string) => ipcRenderer.invoke("ff-poster", abs),
+  ffSubtitle: (abs: string, index: number) => ipcRenderer.invoke("ff-subtitle", abs, index),
 });
